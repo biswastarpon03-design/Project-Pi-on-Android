@@ -34,7 +34,7 @@
 
     <string name="open_in_app">Open in App</string>
     <string name="open_in_browser">Browse Inside App</string>
-    <string name="view_live_channel">Open Live Channel</string>
+    <string name="view_live_channel">Open Live</string>
     <string name="refresh_feed">Refresh</string>
     <string name="loading_updates">Syncing WhatsApp, Telegram &amp; Facebook…</string>
     <string name="feed_empty_title">No public posts synced yet</string>
@@ -52,14 +52,16 @@
     <string name="status_joined">Joined</string>
     <string name="status_mark_joined">Join</string>
     <string name="action_copy_link">Copy link</string>
-    <string name="action_copy_post">Copy post</string>
+    <string name="action_copy_post">Copy</string>
     <string name="action_share_channel">Share</string>
     <string name="action_channel_details">Details</string>
     <string name="action_close">Close</string>
+    <string name="action_open_short">Open</string>
 
     <string name="webview_back">Back</string>
     <string name="webview_forward">Forward</string>
     <string name="webview_reload">Reload</string>
+    <string name="webview_load_error_body">Could not load this channel page on the current network. Retry or open directly in the app.</string>
 
     <string name="snackbar_copied">%1$s copied to clipboard</string>
     <string name="snackbar_no_browser">No app or browser found to open %1$s</string>

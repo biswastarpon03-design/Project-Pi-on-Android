@@ -461,13 +461,19 @@ fun FeedPostCard(
             onClick = onOpenLive,
             modifier = Modifier.weight(1f).heightIn(min = 48.dp),
             shape = MaterialTheme.shapes.small,
+            contentPadding = PaddingValues(horizontal = 8.dp),
             colors =
               ButtonDefaults.buttonColors(
                 containerColor = primaryAccent.brand,
                 contentColor = MaterialTheme.colorScheme.surface,
               ),
           ) {
-            Text(stringResource(R.string.view_live_channel), maxLines = 1)
+            Text(
+              text = stringResource(R.string.view_live_channel),
+              maxLines = 1,
+              softWrap = false,
+              overflow = TextOverflow.Ellipsis,
+            )
           }
         } else {
           OutlinedButton(
@@ -485,6 +491,7 @@ fun FeedPostCard(
             Text(
               text = stringResource(R.string.action_copy_post),
               maxLines = 1,
+              softWrap = false,
               overflow = TextOverflow.Ellipsis,
             )
           }

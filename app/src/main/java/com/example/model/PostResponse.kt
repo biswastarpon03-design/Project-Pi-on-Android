@@ -25,13 +25,23 @@ data class PostResponse(
 object QuestionPostHelper {
   private val QUESTION_HINT_REGEX =
     Regex(
-      """\b(question|quiz|solve|answer|find the|calculate|what is|which of|how many|prove|explain|reply|guess|challenge|puzzle)\b""",
+      """\b(question|quiz|solve|find\s+the|find\s+all|calculate|what\s+is|which\s+of|how\s+many|prove|explain|guess|challenge|puzzle|olympiad|problem)\b""",
+      RegexOption.IGNORE_CASE,
+    )
+
+  private val ANSWER_STATEMENT_REGEX =
+    Regex(
+      """^\s*(the\s+)?(correct\s+)?(ans|answer|solution)\s*(is|will\s+be|was|:|=)""",
       RegexOption.IGNORE_CASE,
     )
 
   fun looksLikeQuestion(text: String): Boolean {
     if (text.isBlank()) return false
-    return text.contains('?') || QUESTION_HINT_REGEX.containsMatchIn(text)
+    if (text.contains('?')) return true
+    if (ANSWER_STATEMENT_REGEX.containsMatchIn(text)) return false
+    return QUESTION_HINT_REGEX.containsMatchIn(text) ||
+      text.contains("প্রশ্ন") ||
+      text.contains("সমাধান")
   }
 
   fun computePostKey(post: FeedPost): String {

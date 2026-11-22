@@ -132,6 +132,12 @@ class ExampleRobolectricTest {
     val fbBoilerplate = ChannelFeedRepository.parseFacebookChannelHtml(fbBoilerplateHtml)
     assertNull(fbBoilerplate.preview.liveTitle)
     assertEquals(0, fbBoilerplate.posts.size)
+    assertTrue(ChannelFeedRepository.isGenericBoilerplate("কমেন্ট করুন"))
+    assertTrue(ChannelFeedRepository.isGenericBoilerplate("লগ ইন করুন"))
+    assertEquals(
+      "https://telegram.me/s/projectpitelegram",
+      ProjectPiChannels.TELEGRAM_MIRROR_WEB_FEED_URL,
+    )
   }
 
   @Test
@@ -207,6 +213,8 @@ class ExampleRobolectricTest {
   fun `question detection and canonical key match across platforms`() {
     assertTrue(QuestionPostHelper.looksLikeQuestion("Daily Question: What is 2 + 2?"))
     assertTrue(QuestionPostHelper.looksLikeQuestion("Solve for x in 3x = 12"))
+    assertTrue(QuestionPostHelper.looksLikeQuestion("Russian math olympiad 2007"))
+    assertFalse(QuestionPostHelper.looksLikeQuestion("The answer will be 1.8751"))
     assertFalse(QuestionPostHelper.looksLikeQuestion("Project π announcement for all members."))
 
     val postA =

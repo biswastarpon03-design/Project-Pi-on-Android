@@ -64,7 +64,17 @@ class ChannelFeedRepository(
     val facebookDeferred =
       async { fetchHtml(ProjectPiChannels.FACEBOOK_URL, DESKTOP_USER_AGENT) }
 
-    val telegramPage = telegramDeferred.await()
+    var telegramPage = telegramDeferred.await()
+    if (telegramPage == null || parseTelegramChannelHtml(telegramPage.html).posts.isEmpty()) {
+      val mirrorPage =
+        fetchHtml(ProjectPiChannels.TELEGRAM_MIRROR_WEB_FEED_URL, MOBILE_USER_AGENT)
+      if (mirrorPage != null) {
+        val mirrorParsed = parseTelegramChannelHtml(mirrorPage.html)
+        if (telegramPage == null || mirrorParsed.posts.isNotEmpty()) {
+          telegramPage = mirrorPage
+        }
+      }
+    }
     val whatsappPage = whatsappDeferred.await()
     val facebookPage = facebookDeferred.await()
 
@@ -147,7 +157,7 @@ class ChannelFeedRepository(
     private val MESSAGE_VIEWS_REGEX =
       Regex("""class="tgme_widget_message_views">([^<]+)</span>""")
     private val MESSAGE_PHOTO_REGEX =
-      Regex("""tgme_widget_message_photo_wrap[^>]*style="[^"]*background-image:url\('([^']+)'\)""")
+      Regex("""tgme_widget_message_photo_wrap[^>]*style="[^"]*background-image:url\(['"]?([^'")]+)['"]?\)""")
 
     private val META_TAG_REGEX = Regex("""<meta\b[^>]*>""", RegexOption.IGNORE_CASE)
     private val ATTR_PROPERTY_REGEX =
@@ -181,6 +191,12 @@ class ChannelFeedRepository(
         "allow all cookies",
         "decline optional cookies",
         "scan the qr code",
+        "কমেন্ট করুন",
+        "লগ ইন করুন",
+        "নতুন অ্যাকাউন্ট তৈরি করুন",
+        "পাসওয়ার্ড ভুলে গেছেন",
+        "থেকে আরও দেখুন",
+        "মন্তব্য করুন",
       )
 
     fun interleaveChannelPosts(
@@ -404,11 +420,14 @@ class ChannelFeedRepository(
       return results.distinct()
     }
 
-    private fun isGenericBoilerplate(text: String): Boolean {
-      val lower = text.lowercase()
+    fun isGenericBoilerplate(text: String): Boolean {
+      val lower = text.trim().lowercase()
       return GENERIC_BOILERPLATE_PHRASES.any { lower.contains(it) } ||
         lower == "facebook" ||
-        lower == "whatsapp"
+        lower == "whatsapp" ||
+        lower == "কমেন্ট করুন" ||
+        lower == "লাইক" ||
+        lower == "শেয়ার করুন"
     }
 
     private fun cleanHtmlText(rawHtml: String): String {

@@ -83,6 +83,7 @@ object ProjectPiChannels {
   const val FACEBOOK_URL = "https://www.facebook.com/share/1ddaQL72TH/"
   const val TELEGRAM_URL = "https://t.me/projectpitelegram"
   const val TELEGRAM_WEB_FEED_URL = "https://t.me/s/projectpitelegram"
+  const val TELEGRAM_MIRROR_WEB_FEED_URL = "https://telegram.me/s/projectpitelegram"
 
   val all: List<CommunityChannel> =
     listOf(

@@ -202,6 +202,8 @@ fun ProjectPiScreen(
 
     BackgroundChannelSyncer(
       syncGeneration = uiState.syncGeneration,
+      enabled = uiState.selectedTab == AppTab.UPDATES,
+      includeTelegramFallback = (uiState.platformPostCounts[ChannelPlatform.TELEGRAM] ?: 0) == 0,
       onPostsExtracted = onWebViewPostsExtracted,
       modifier = Modifier.fillMaxSize(),
     )
@@ -401,18 +403,18 @@ fun ProjectPiScreen(
             )
           }
 
-          uiState.visitedReaderTabs.forEach { tab ->
-            val channel = ProjectPiChannels.forTab(tab)
-            if (channel != null) {
-              val title = stringResource(channel.titleRes)
+          val activeChannel = ProjectPiChannels.forTab(uiState.selectedTab)
+          if (activeChannel != null) {
+            val title = stringResource(activeChannel.titleRes)
+            androidx.compose.runtime.key(activeChannel.id) {
               ChannelWebViewReader(
-                channel = channel,
-                isActive = uiState.selectedTab == tab,
-                onOpenExternal = { openExternalUrl(channel.url, title) },
-                onCopyLink = { copyText(channel.url, "$title link") },
-                onShareLink = { shareSingleChannel(channel) },
+                channel = activeChannel,
+                isActive = true,
+                onOpenExternal = { openExternalUrl(activeChannel.url, title) },
+                onCopyLink = { copyText(activeChannel.url, "$title link") },
+                onShareLink = { shareSingleChannel(activeChannel) },
                 onPostsExtracted = { extracted ->
-                  onWebViewPostsExtracted(channel.platform, extracted)
+                  onWebViewPostsExtracted(activeChannel.platform, extracted)
                 },
                 onBackExitReader = { onSelectTab(AppTab.UPDATES) },
               )

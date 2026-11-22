@@ -91,6 +91,8 @@ import org.json.JSONArray
 @Composable
 fun BackgroundChannelSyncer(
   syncGeneration: Int,
+  enabled: Boolean = true,
+  includeTelegramFallback: Boolean = false,
   onPostsExtracted: (ChannelPlatform, List<ExtractedDomPost>) -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -101,20 +103,26 @@ fun BackgroundChannelSyncer(
   val handler = remember { Handler(Looper.getMainLooper()) }
   val whatsappChannel = remember { ProjectPiChannels.forPlatform(ChannelPlatform.WHATSAPP) }
   val facebookChannel = remember { ProjectPiChannels.forPlatform(ChannelPlatform.FACEBOOK) }
+  val telegramChannel = remember { ProjectPiChannels.forPlatform(ChannelPlatform.TELEGRAM) }
 
   var activeChannel by remember { mutableStateOf<CommunityChannel?>(null) }
-  var mountSyncWebView by remember { mutableStateOf(false) }
+  var mountSyncWebView by remember(syncGeneration) { mutableStateOf(false) }
+  var completedGeneration by remember { mutableIntStateOf(0) }
 
-  // Defer WebView startup briefly so first Compose frames render smoothly without GPU contention
-  LaunchedEffect(syncGeneration) {
+  // Defer WebView startup briefly so first Compose frames render smoothly, then unmount once done
+  LaunchedEffect(syncGeneration, enabled) {
+    if (!enabled || completedGeneration >= syncGeneration) {
+      mountSyncWebView = false
+      return@LaunchedEffect
+    }
     delay(1_200L)
     mountSyncWebView = true
   }
 
-  if (!mountSyncWebView) return
+  if (!mountSyncWebView || !enabled) return
 
   val webView =
-    remember(context) {
+    remember(context, syncGeneration) {
       createSafeWebView(context)?.apply {
         visibility = View.INVISIBLE
         isClickable = false
@@ -173,19 +181,32 @@ fun BackgroundChannelSyncer(
 
   if (webView == null) return
 
-  // Sequentially sync WhatsApp then Facebook using a single lightweight background WebView
+  // Sequentially sync WhatsApp, Facebook, and (if needed) Telegram, then unmount hidden WebView
   LaunchedEffect(syncGeneration, webView) {
     handler.removeCallbacksAndMessages(null)
     activeChannel = whatsappChannel
     configureChannelUserAgent(webView, whatsappChannel.platform)
     webView.loadUrl(whatsappChannel.inAppUrl)
 
-    delay(6_500L)
+    delay(6_000L)
 
     handler.removeCallbacksAndMessages(null)
     activeChannel = facebookChannel
     configureChannelUserAgent(webView, facebookChannel.platform)
     webView.loadUrl(facebookChannel.inAppUrl)
+
+    delay(6_000L)
+
+    if (includeTelegramFallback) {
+      handler.removeCallbacksAndMessages(null)
+      activeChannel = telegramChannel
+      configureChannelUserAgent(webView, telegramChannel.platform)
+      webView.loadUrl(ProjectPiChannels.TELEGRAM_MIRROR_WEB_FEED_URL)
+      delay(5_500L)
+    }
+
+    completedGeneration = syncGeneration
+    mountSyncWebView = false
   }
 
   DisposableEffect(webView) {
@@ -232,6 +253,9 @@ fun ChannelWebViewReader(
   var canGoForward by remember { mutableStateOf(false) }
   var showMoreMenu by remember { mutableStateOf(false) }
   var renderCrashFallback by remember { mutableStateOf(false) }
+  var loadError by remember { mutableStateOf(false) }
+  var triedMirrorUrl by remember(channel.id) { mutableStateOf(false) }
+  var activeUrl by remember(channel.id) { mutableStateOf(channel.inAppUrl) }
 
   val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
@@ -258,6 +282,7 @@ fun ChannelWebViewReader(
           object : WebViewClient() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
               isLoading = true
+              loadError = false
               canGoBack = view?.canGoBack() == true
               canGoForward = view?.canGoForward() == true
             }
@@ -268,7 +293,7 @@ fun ChannelWebViewReader(
               canGoForward = view?.canGoForward() == true
               runCatching { CookieManager.getInstance().flush() }
 
-              if (view != null) {
+              if (view != null && !loadError) {
                 listOf(1500L, 3500L).forEach { delayMs ->
                   mainHandler.postDelayed(
                     {
@@ -280,6 +305,40 @@ fun ChannelWebViewReader(
                     },
                     delayMs,
                   )
+                }
+              }
+            }
+
+            override fun onReceivedError(
+              view: WebView?,
+              request: WebResourceRequest?,
+              error: android.webkit.WebResourceError?,
+            ) {
+              if (request?.isForMainFrame == true) {
+                if (channel.platform == ChannelPlatform.TELEGRAM && !triedMirrorUrl) {
+                  triedMirrorUrl = true
+                  activeUrl = ProjectPiChannels.TELEGRAM_MIRROR_WEB_FEED_URL
+                  view?.loadUrl(ProjectPiChannels.TELEGRAM_MIRROR_WEB_FEED_URL)
+                } else {
+                  isLoading = false
+                  loadError = true
+                }
+              }
+            }
+
+            override fun onReceivedHttpError(
+              view: WebView?,
+              request: WebResourceRequest?,
+              errorResponse: android.webkit.WebResourceResponse?,
+            ) {
+              if (request?.isForMainFrame == true && (errorResponse?.statusCode ?: 0) >= 500) {
+                if (channel.platform == ChannelPlatform.TELEGRAM && !triedMirrorUrl) {
+                  triedMirrorUrl = true
+                  activeUrl = ProjectPiChannels.TELEGRAM_MIRROR_WEB_FEED_URL
+                  view?.loadUrl(ProjectPiChannels.TELEGRAM_MIRROR_WEB_FEED_URL)
+                } else {
+                  isLoading = false
+                  loadError = true
                 }
               }
             }
@@ -308,9 +367,25 @@ fun ChannelWebViewReader(
               return true
             }
           }
-        loadUrl(channel.inAppUrl)
+        loadUrl(activeUrl)
       }
     }
+
+  LaunchedEffect(activeUrl, isLoading, loadError, renderCrashFallback) {
+    if (isLoading && !loadError && !renderCrashFallback) {
+      delay(12_000L)
+      if (isLoading && progress < 25 && !loadError) {
+        if (channel.platform == ChannelPlatform.TELEGRAM && !triedMirrorUrl && webView != null) {
+          triedMirrorUrl = true
+          activeUrl = ProjectPiChannels.TELEGRAM_MIRROR_WEB_FEED_URL
+          webView.loadUrl(ProjectPiChannels.TELEGRAM_MIRROR_WEB_FEED_URL)
+        } else {
+          isLoading = false
+          loadError = true
+        }
+      }
+    }
+  }
 
   DisposableEffect(webView) {
     onDispose {
@@ -324,7 +399,7 @@ fun ChannelWebViewReader(
 
   if (isActive) {
     BackHandler {
-      if (webView != null && !renderCrashFallback && webView.canGoBack()) {
+      if (webView != null && !renderCrashFallback && !loadError && webView.canGoBack()) {
         webView.goBack()
       } else {
         onBackExitReader()
@@ -333,195 +408,213 @@ fun ChannelWebViewReader(
   }
 
   Column(
-    modifier =
-      (if (isActive) modifier.fillMaxSize() else modifier.size(0.dp))
-        .background(MaterialTheme.colorScheme.background)
+    modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
   ) {
-    if (isActive) {
-      Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-          Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+    Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp) {
+      Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+          Box(
+            modifier =
+              Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(accent.container),
+            contentAlignment = Alignment.Center,
           ) {
-            Box(
-              modifier =
-                Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(accent.container),
-              contentAlignment = Alignment.Center,
-            ) {
-              PlatformGlyphIcon(
-                platform = channel.platform,
-                tint = accent.foreground,
-                modifier = Modifier.size(18.dp),
-              )
-            }
-
-            Column(modifier = Modifier.weight(1f).padding(horizontal = 6.dp)) {
-              Text(
-                text = stringResource(channel.titleRes),
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-              Text(
-                text = channel.domain,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-            }
-
-            IconButton(
-              onClick = { if (webView?.canGoBack() == true) webView.goBack() },
-              enabled = canGoBack && !renderCrashFallback,
-              modifier = Modifier.minimumInteractiveComponentSize(),
-            ) {
-              Icon(
-                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                contentDescription = stringResource(R.string.webview_back),
-              )
-            }
-
-            IconButton(
-              onClick = {
-                if (renderCrashFallback) {
-                  renderCrashFallback = false
-                }
-                webView?.reload()
-              },
-              modifier = Modifier.minimumInteractiveComponentSize(),
-            ) {
-              Icon(
-                imageVector = Icons.Rounded.Refresh,
-                contentDescription = stringResource(R.string.webview_reload),
-              )
-            }
-
-            FilledTonalButton(
-              onClick = onOpenExternal,
-              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-              colors =
-                ButtonDefaults.filledTonalButtonColors(
-                  containerColor = accent.container,
-                  contentColor = accent.foreground,
-                ),
-              modifier = Modifier.testTag("reader_open_native_${channel.id}"),
-            ) {
-              Text(
-                text = stringResource(R.string.open_in_app),
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-              )
-              Spacer(Modifier.width(4.dp))
-              Icon(
-                imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
-                contentDescription = null,
-                modifier = Modifier.size(14.dp),
-              )
-            }
-
-            Box {
-              IconButton(
-                onClick = { showMoreMenu = true },
-                modifier = Modifier.minimumInteractiveComponentSize(),
-              ) {
-                Icon(
-                  imageVector = Icons.Rounded.MoreVert,
-                  contentDescription = stringResource(R.string.action_channel_details),
-                )
-              }
-              DropdownMenu(
-                expanded = showMoreMenu,
-                onDismissRequest = { showMoreMenu = false },
-              ) {
-                DropdownMenuItem(
-                  text = { Text(stringResource(R.string.webview_forward)) },
-                  leadingIcon = {
-                    Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = null)
-                  },
-                  enabled = canGoForward,
-                  onClick = {
-                    showMoreMenu = false
-                    if (webView?.canGoForward() == true) webView.goForward()
-                  },
-                )
-                DropdownMenuItem(
-                  text = { Text(stringResource(R.string.action_copy_link)) },
-                  leadingIcon = { Icon(Icons.Rounded.ContentCopy, contentDescription = null) },
-                  onClick = {
-                    showMoreMenu = false
-                    onCopyLink()
-                  },
-                )
-                DropdownMenuItem(
-                  text = { Text(stringResource(R.string.action_share_channel)) },
-                  leadingIcon = { Icon(Icons.Rounded.Share, contentDescription = null) },
-                  onClick = {
-                    showMoreMenu = false
-                    onShareLink()
-                  },
-                )
-              }
-            }
-          }
-
-          AnimatedVisibility(visible = isLoading && webView != null && !renderCrashFallback) {
-            LinearProgressIndicator(
-              progress = { (progress.coerceIn(5, 100)) / 100f },
-              modifier = Modifier.fillMaxWidth().height(3.dp),
-              color = accent.brand,
-              trackColor = MaterialTheme.colorScheme.surfaceVariant,
+            PlatformGlyphIcon(
+              platform = channel.platform,
+              tint = accent.foreground,
+              modifier = Modifier.size(18.dp),
             )
           }
-          if (!isLoading || webView == null || renderCrashFallback) {
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+          Column(modifier = Modifier.weight(1f).padding(horizontal = 6.dp)) {
+            Text(
+              text = stringResource(channel.titleRes),
+              style = MaterialTheme.typography.titleSmall,
+              color = MaterialTheme.colorScheme.onSurface,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+              text = channel.domain,
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
           }
+
+          IconButton(
+            onClick = { if (webView?.canGoBack() == true) webView.goBack() },
+            enabled = canGoBack && !renderCrashFallback && !loadError,
+            modifier = Modifier.minimumInteractiveComponentSize(),
+          ) {
+            Icon(
+              imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+              contentDescription = stringResource(R.string.webview_back),
+            )
+          }
+
+          IconButton(
+            onClick = {
+              renderCrashFallback = false
+              loadError = false
+              isLoading = true
+              webView?.loadUrl(activeUrl)
+            },
+            modifier = Modifier.minimumInteractiveComponentSize(),
+          ) {
+            Icon(
+              imageVector = Icons.Rounded.Refresh,
+              contentDescription = stringResource(R.string.webview_reload),
+            )
+          }
+
+          FilledTonalButton(
+            onClick = onOpenExternal,
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+            colors =
+              ButtonDefaults.filledTonalButtonColors(
+                containerColor = accent.container,
+                contentColor = accent.foreground,
+              ),
+            modifier = Modifier.testTag("reader_open_native_${channel.id}"),
+          ) {
+            Text(
+              text = stringResource(R.string.action_open_short),
+              style = MaterialTheme.typography.labelSmall,
+              maxLines = 1,
+              softWrap = false,
+            )
+            Spacer(Modifier.width(4.dp))
+            Icon(
+              imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+              contentDescription = null,
+              modifier = Modifier.size(14.dp),
+            )
+          }
+
+          Box {
+            IconButton(
+              onClick = { showMoreMenu = true },
+              modifier = Modifier.minimumInteractiveComponentSize(),
+            ) {
+              Icon(
+                imageVector = Icons.Rounded.MoreVert,
+                contentDescription = stringResource(R.string.action_channel_details),
+              )
+            }
+            DropdownMenu(
+              expanded = showMoreMenu,
+              onDismissRequest = { showMoreMenu = false },
+            ) {
+              DropdownMenuItem(
+                text = { Text(stringResource(R.string.webview_forward)) },
+                leadingIcon = {
+                  Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = null)
+                },
+                enabled = canGoForward && !loadError,
+                onClick = {
+                  showMoreMenu = false
+                  if (webView?.canGoForward() == true) webView.goForward()
+                },
+              )
+              DropdownMenuItem(
+                text = { Text(stringResource(R.string.action_copy_link)) },
+                leadingIcon = { Icon(Icons.Rounded.ContentCopy, contentDescription = null) },
+                onClick = {
+                  showMoreMenu = false
+                  onCopyLink()
+                },
+              )
+              DropdownMenuItem(
+                text = { Text(stringResource(R.string.action_share_channel)) },
+                leadingIcon = { Icon(Icons.Rounded.Share, contentDescription = null) },
+                onClick = {
+                  showMoreMenu = false
+                  onShareLink()
+                },
+              )
+            }
+          }
+        }
+
+        AnimatedVisibility(
+          visible = isLoading && webView != null && !renderCrashFallback && !loadError
+        ) {
+          LinearProgressIndicator(
+            progress = { (progress.coerceIn(5, 100)) / 100f },
+            modifier = Modifier.fillMaxWidth().height(3.dp),
+            color = accent.brand,
+            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+          )
+        }
+        if (!isLoading || webView == null || renderCrashFallback || loadError) {
+          HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         }
       }
     }
 
-    if (webView == null || renderCrashFallback) {
-      if (isActive) {
-        Box(
-          modifier = Modifier.weight(1f).fillMaxWidth().padding(24.dp),
-          contentAlignment = Alignment.Center,
+    if (webView == null || renderCrashFallback || loadError) {
+      Box(
+        modifier = Modifier.weight(1f).fillMaxWidth().padding(24.dp),
+        contentAlignment = Alignment.Center,
+      ) {
+        Surface(
+          shape = MaterialTheme.shapes.medium,
+          color = MaterialTheme.colorScheme.surface,
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+          modifier = Modifier.fillMaxWidth(),
         ) {
-          Surface(
-            shape = MaterialTheme.shapes.medium,
-            color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            modifier = Modifier.fillMaxWidth(),
+          Column(
+            modifier = Modifier.padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
           ) {
-            Column(
-              modifier = Modifier.padding(24.dp),
-              verticalArrangement = Arrangement.spacedBy(12.dp),
-              horizontalAlignment = Alignment.CenterHorizontally,
+            Icon(
+              imageVector = Icons.Rounded.Public,
+              contentDescription = null,
+              tint = accent.foreground,
+              modifier = Modifier.size(36.dp),
+            )
+            Text(
+              text = stringResource(channel.titleRes),
+              style = MaterialTheme.typography.titleMedium,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+              text =
+                if (loadError) stringResource(R.string.webview_load_error_body)
+                else stringResource(channel.descriptionRes),
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-              Icon(
-                imageVector = Icons.Rounded.Public,
-                contentDescription = null,
-                tint = accent.foreground,
-                modifier = Modifier.size(36.dp),
-              )
-              Text(
-                text = stringResource(channel.titleRes),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-              )
-              Text(
-                text = stringResource(channel.descriptionRes),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
+              if (webView != null) {
+                FilledTonalButton(
+                  onClick = {
+                    renderCrashFallback = false
+                    loadError = false
+                    isLoading = true
+                    webView.loadUrl(activeUrl)
+                  },
+                  modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                  shape = MaterialTheme.shapes.small,
+                ) {
+                  Text(stringResource(R.string.retry))
+                }
+              }
               Button(
                 onClick = onOpenExternal,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                 shape = MaterialTheme.shapes.small,
               ) {
-                Text(stringResource(R.string.open_in_app))
+                Text(stringResource(R.string.open_in_app), maxLines = 1)
               }
             }
           }
@@ -530,10 +623,7 @@ fun ChannelWebViewReader(
     } else {
       AndroidView(
         factory = { webView },
-        update = { view -> view.visibility = if (isActive) View.VISIBLE else View.GONE },
-        modifier =
-          (if (isActive) Modifier.weight(1f).fillMaxWidth() else Modifier.size(0.dp))
-            .testTag("webview_${channel.id}"),
+        modifier = Modifier.weight(1f).fillMaxWidth().testTag("webview_${channel.id}"),
       )
     }
   }
@@ -584,31 +674,54 @@ private fun extractChannelPostsFromWebView(
   platform: ChannelPlatform,
   onResult: (List<ExtractedDomPost>) -> Unit,
 ) {
+  val isTelegram = platform == ChannelPlatform.TELEGRAM
+  val isFacebook = platform == ChannelPlatform.FACEBOOK
   val selector =
     when (platform) {
       ChannelPlatform.WHATSAPP ->
-        "[data-testid='msg-container'], [data-testid='channel-update-message'], div[data-id], div.copyable-text, span.selectable-text, div[role='listitem'], div[role='main'] div[dir='auto'], div[role='main'] span[dir='ltr'], div[role='main'] span[dir='auto']"
+        "[data-testid='msg-container'], [data-testid='channel-update-message'], div[data-id], div.copyable-text, span.selectable-text, div[role='listitem']"
       ChannelPlatform.FACEBOOK ->
-        "div[data-ad-preview='message'], div[data-ad-comet-preview='message'], div[data-testid='post_message'], div[role='article'] div[dir='auto'], div[role='article'] span[dir='auto'], div.userContent"
-      ChannelPlatform.TELEGRAM -> ".tgme_widget_message_text"
+        "div[data-ad-preview='message'], div[data-ad-comet-preview='message'], div[data-testid='post_message'], div.userContent, div[role='article'] div[dir='auto']"
+      ChannelPlatform.TELEGRAM -> ".tgme_widget_message"
     }
   val script =
     """
     (function() {
       try {
-        var closeBtn = document.querySelector("[role='dialog'] [aria-label='Close'], [aria-label='Close'], [aria-label='close']");
+        var closeBtn = document.querySelector("[role='dialog'] [aria-label='Close'], [role='dialog'] [aria-label='close'], [role='dialog'] [aria-label='বন্ধ করুন'], [aria-label='Close'], [aria-label='close'], [aria-label='বন্ধ করুন']");
         if (closeBtn && closeBtn.click) { try { closeBtn.click(); } catch(e) {} }
+        var isTelegram = $isTelegram;
+        var isFacebook = $isFacebook;
         var nodes = document.querySelectorAll("$selector");
         var seen = {};
         var out = [];
-        var blocked = /log in to facebook|log into facebook|create new account|forgotten password|allow all cookies|decline optional cookies|we use cookies|cookie policy|terms of service|privacy policy|download whatsapp|get whatsapp|whatsapp web|help center|end-to-end encrypted|scan the qr code|see more on facebook|view channel in whatsapp/i;
+        var blocked = /log in to facebook|log into facebook|create new account|forgotten password|allow all cookies|decline optional cookies|we use cookies|cookie policy|terms of service|privacy policy|download whatsapp|get whatsapp|whatsapp web|help center|end-to-end encrypted|scan the qr code|see more on facebook|view channel in whatsapp|কমেন্ট করুন|লগ ইন করুন|নতুন অ্যাকাউন্ট|পাসওয়ার্ড ভুলে গেছেন|থেকে আরও দেখুন|মন্তব্য করুন/i;
         for (var i = 0; i < nodes.length && out.length < 25; i++) {
           var el = nodes[i];
+          if (isTelegram) {
+            var txtEl = el.querySelector(".tgme_widget_message_text");
+            var t = txtEl ? (txtEl.innerText || "").trim() : "";
+            var photoEl = el.querySelector(".tgme_widget_message_photo_wrap");
+            var bg = photoEl ? (photoEl.style.backgroundImage || "") : "";
+            var m = bg.match(/url\(['"]?(https:\/\/[^'")]+)['"]?\)/i);
+            var imgUrl = m ? m[1] : null;
+            if (!t && !imgUrl) continue;
+            if (seen[t + "|" + (imgUrl || "")]) continue;
+            seen[t + "|" + (imgUrl || "")] = true;
+            out.push({ text: t, imageUrl: imgUrl });
+            continue;
+          }
+          if (el.closest && (el.closest("[role='dialog']") || el.closest("form") || el.closest("footer") || el.closest("nav"))) continue;
+          if (isFacebook && el.closest) {
+            if (el.closest("[aria-label*='Comment' i]") || el.closest("[aria-label*='মন্তব্য']")) continue;
+            var art = el.closest("[role='article']");
+            if (art && art.parentElement && art.parentElement.closest("[role='article']")) continue;
+          }
           var t = (el.innerText || "").trim();
-          if (t.length < 10 || t.length > 2000) continue;
+          if (t.length < 12 || t.length > 2000) continue;
           if (blocked.test(t)) continue;
           var lower = t.toLowerCase();
-          if (lower === "follow" || lower === "share" || lower === "like" || lower === "comment" || lower === "open app" || lower === "features" || lower === "download") continue;
+          if (lower === "follow" || lower === "share" || lower === "like" || lower === "comment" || lower === "open app" || lower === "features" || lower === "download" || lower === "see more" || lower === "লাইক" || lower === "শেয়ার করুন" || lower === "আরও দেখুন" || lower === "ফলো করুন") continue;
           var duplicateSub = false;
           for (var j = 0; j < out.length; j++) {
             if (out[j].text.indexOf(t) !== -1 || t.indexOf(out[j].text) !== -1) {
@@ -619,9 +732,22 @@ private fun extractChannelPostsFromWebView(
           }
           if (duplicateSub || seen[t]) continue;
           seen[t] = true;
-          var imgEl = el.querySelector ? el.querySelector("img[src^='https://']") : null;
-          var imgUrl = (imgEl && imgEl.naturalWidth > 80) ? imgEl.src : null;
-          out.push({ text: t, imageUrl: imgUrl });
+          var container = (el.closest && (el.closest("[role='article']") || el.closest("[data-testid='msg-container']"))) || el.parentElement || el;
+          var imgs = container.querySelectorAll ? container.querySelectorAll("img[src^='https://']") : [];
+          var bestImg = null;
+          var bestArea = 0;
+          for (var k = 0; k < imgs.length; k++) {
+            var im = imgs[k];
+            var src = im.src || "";
+            if (src.indexOf("emoji") !== -1 || src.indexOf("rsrc.php") !== -1) continue;
+            var w = im.naturalWidth || 0;
+            var h = im.naturalHeight || 0;
+            if (w >= 120 && h >= 80 && (w * h) > bestArea) {
+              bestArea = w * h;
+              bestImg = src;
+            }
+          }
+          out.push({ text: t, imageUrl: bestImg });
         }
         return JSON.stringify(out);
       } catch (e) {
