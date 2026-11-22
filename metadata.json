@@ -1,0 +1,6 @@
+{
+  "name": "Project π",
+  "description": "Official community hub for Project π channels on WhatsApp, Facebook, and Telegram.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

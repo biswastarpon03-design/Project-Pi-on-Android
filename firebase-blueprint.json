@@ -1,0 +1,63 @@
+{
+  "entities": {
+    "PostResponse": {
+      "title": "PostResponse",
+      "description": "A user's saved answer or response to a Project π question or update across WhatsApp, Facebook, or Telegram.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated Firebase UID of the response author."
+        },
+        "postId": {
+          "type": "string",
+          "description": "Identifier of the post being answered."
+        },
+        "postKey": {
+          "type": "string",
+          "description": "Canonical alphanumeric key matching the cross-platform post across channels."
+        },
+        "questionExcerpt": {
+          "type": "string",
+          "description": "Short excerpt of the question or post prompt."
+        },
+        "answerText": {
+          "type": "string",
+          "description": "User's written answer or response text."
+        },
+        "platformSummary": {
+          "type": "string",
+          "description": "Comma-separated summary of platforms where the question appeared."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp() when created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp() on creation and update."
+        }
+      },
+      "required": [
+        "userId",
+        "postId",
+        "postKey",
+        "questionExcerpt",
+        "answerText",
+        "platformSummary",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/responses/{responseId}": {
+      "schema": {
+        "$ref": "#/entities/PostResponse"
+      },
+      "description": "User-scoped responses and answers saved by each signed-in Project π user."
+    }
+  }
+}

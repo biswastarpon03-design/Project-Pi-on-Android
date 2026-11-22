@@ -1,0 +1,116 @@
+<resources>
+    <string name="app_name">Project π</string>
+    <string name="hero_badge">AUTO-SYNCED LIVE FEED</string>
+    <string name="hero_title">Project π</string>
+    <string name="hero_subtitle">Unified updates from WhatsApp, Telegram, and Facebook — synced automatically without duplicates.</string>
+    <string name="share_all_channels">Share All Links</string>
+    <string name="channels_joined_progress">%1$d of %2$d joined</string>
+    <string name="channels_section_title">Channels</string>
+    <string name="feed_section_title">Unified Updates</string>
+    <string name="feed_search_placeholder">Search across all channels…</string>
+    <string name="sync_status_syncing">Syncing all channels…</string>
+    <string name="sync_status_live">Auto-sync active</string>
+
+    <string name="nav_updates">Updates</string>
+    <string name="nav_whatsapp">WhatsApp</string>
+    <string name="nav_telegram">Telegram</string>
+    <string name="nav_facebook">Facebook</string>
+
+    <string name="filter_all_platforms">All</string>
+    <string name="channel_whatsapp_title">WhatsApp Channel</string>
+    <string name="channel_whatsapp_subtitle">Official Broadcasts</string>
+    <string name="channel_whatsapp_description">Follow the Project π channel on WhatsApp for direct announcements and instant updates.</string>
+    <string name="channel_whatsapp_cta">Open Live</string>
+
+    <string name="channel_telegram_title">Telegram Channel</string>
+    <string name="channel_telegram_subtitle">Updates &amp; Community</string>
+    <string name="channel_telegram_description">Join the Project π Telegram channel for updates and community engagement.</string>
+    <string name="channel_telegram_cta">Open Live</string>
+
+    <string name="channel_facebook_title">Facebook</string>
+    <string name="channel_facebook_subtitle">Community Page</string>
+    <string name="channel_facebook_description">Connect with Project π on Facebook for posts, highlights, and community sharing.</string>
+    <string name="channel_facebook_cta">Open Live</string>
+
+    <string name="open_in_app">Open in App</string>
+    <string name="open_in_browser">Browse Inside App</string>
+    <string name="view_live_channel">Open Live Channel</string>
+    <string name="refresh_feed">Refresh</string>
+    <string name="loading_updates">Syncing WhatsApp, Telegram &amp; Facebook…</string>
+    <string name="feed_empty_title">No public posts synced yet</string>
+    <string name="feed_empty_body">Tap any channel tab below to browse or sign in once so Project π can auto-sync its posts.</string>
+    <string name="feed_no_search_results">No posts match \"%1$s\".</string>
+    <string name="feed_error_body">Could not reach the network right now. You can still browse or retry.</string>
+    <string name="retry">Retry</string>
+    <string name="subscribers_label">%1$s subscribers</string>
+    <string name="live_channel_badge">Live Channel</string>
+    <string name="channel_sync_hint_title">Want WhatsApp &amp; Facebook posts in this feed?</string>
+    <string name="channel_sync_hint_body">Public previews load automatically when accessible. If a platform asks to open or sign in, view its tab once inside Project π to sync posts here.</string>
+    <string name="toggle_search">Search updates</string>
+
+    <string name="badge_verified">Verified</string>
+    <string name="status_joined">Joined</string>
+    <string name="status_mark_joined">Join</string>
+    <string name="action_copy_link">Copy link</string>
+    <string name="action_copy_post">Copy post</string>
+    <string name="action_share_channel">Share</string>
+    <string name="action_channel_details">Details</string>
+    <string name="action_close">Close</string>
+
+    <string name="webview_back">Back</string>
+    <string name="webview_forward">Forward</string>
+    <string name="webview_reload">Reload</string>
+
+    <string name="snackbar_copied">%1$s copied to clipboard</string>
+    <string name="snackbar_no_browser">No app or browser found to open %1$s</string>
+    <string name="share_chooser_title">Share Project π</string>
+    <string name="share_all_message">Connect with Project π on our official channels:\n\n• WhatsApp Channel:\n%1$s\n\n• Facebook:\n%2$s\n\n• Telegram Channel:\n%3$s</string>
+    <string name="share_single_message">Follow %1$s (%2$s):\n%3$s</string>
+
+    <string name="detail_full_url_label">Official URL</string>
+    <string name="detail_joined_toggle_title">I follow this channel</string>
+    <string name="detail_joined_toggle_subtitle">Keep track of the Project π communities you have joined.</string>
+
+    <string name="verification_title">Verified Official Channels</string>
+    <string name="verification_body">All in-app viewers and auto-synced feeds connect directly to official Project π channels on whatsapp.com, t.me, and facebook.com.</string>
+
+    <string name="cd_project_pi_logo">Project π official circular emblem</string>
+    <string name="cd_share_all">Share all Project π channel links</string>
+    <string name="cd_refresh_feed">Refresh channel updates</string>
+    <string name="cd_post_image">Attached update media</string>
+
+    <string name="auth_title">Welcome to Project π</string>
+    <string name="auth_subtitle">Follow official WhatsApp, Telegram, and Facebook updates in one unified feed—and save your answers to community questions across devices.</string>
+    <string name="sign_in_google">Sign in with Google</string>
+    <string name="sign_out">Sign out</string>
+    <string name="cd_sign_out">Sign out of Google account</string>
+    <string name="auth_error_cancelled">Google Sign-In was cancelled or rejected by Google Play Services. If this happened after choosing an account, verify the app signing certificate (SHA-1) in Firebase.</string>
+    <string name="auth_error_no_credential">No eligible Google account found on this device. Add a Google account in device Settings and try again.</string>
+    <string name="auth_error_provider_config">Google Sign-In is unavailable or misconfigured on this device.</string>
+    <string name="auth_error_network">Network error during Google Sign-In. Check your internet connection and try again.</string>
+    <string name="auth_error_invalid_credential">Google sign-in token expired or was invalid. Please try again.</string>
+    <string name="auth_error_user_disabled">This account has been disabled. Contact support for help.</string>
+    <string name="auth_error_account_conflict">An account already exists with this email using a different sign-in method.</string>
+    <string name="auth_error_operation_not_allowed">Google Sign-In is not enabled for this Firebase project.</string>
+    <string name="auth_error_missing_web_client_id">Google Sign-In configuration missing (default_web_client_id).</string>
+    <string name="auth_error_unexpected_credential">Sign-in failed: received an unexpected credential type.</string>
+    <string name="auth_error_generic">Google Sign-In failed: %1$s</string>
+    <string name="action_retry">Retry</string>
+
+    <string name="badge_question">Question</string>
+    <string name="badge_answered_count">%1$d answered</string>
+    <string name="action_respond">Answer</string>
+    <string name="action_hide_respond">Hide box</string>
+    <string name="answer_field_label">Your answer or response</string>
+    <string name="answer_field_placeholder">Write your answer or thoughts…</string>
+    <string name="answer_submit">Save Answer</string>
+    <string name="answer_update">Update Answer</string>
+    <string name="answer_cancel_edit">Cancel edit</string>
+    <string name="answer_saved_header">Saved Responses (%1$d)</string>
+    <string name="answer_saved_snackbar">Answer saved</string>
+    <string name="answer_updated_snackbar">Answer updated</string>
+    <string name="answer_deleted_snackbar">Answer deleted</string>
+    <string name="cd_edit_answer">Edit answer</string>
+    <string name="cd_delete_answer">Delete answer</string>
+    <string name="cd_copy_answer">Copy answer</string>
+</resources>
