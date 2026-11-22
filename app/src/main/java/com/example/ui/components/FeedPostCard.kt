@@ -258,7 +258,10 @@ fun FeedPostCard(
           contentDescription = stringResource(R.string.cd_post_image),
           contentScale = ContentScale.Crop,
           modifier =
-            Modifier.fillMaxWidth().heightIn(max = 220.dp).clip(MaterialTheme.shapes.small),
+            Modifier.fillMaxWidth()
+              .heightIn(min = 120.dp, max = 280.dp)
+              .clip(MaterialTheme.shapes.small)
+              .background(MaterialTheme.colorScheme.surfaceVariant),
         )
       }
 

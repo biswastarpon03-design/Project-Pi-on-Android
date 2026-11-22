@@ -22,6 +22,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -57,6 +58,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -142,12 +144,13 @@ fun BackgroundChannelSyncer(
               val target = activeChannel ?: return
               if (view == null) return
               runCatching { CookieManager.getInstance().flush() }
-              val delays = listOf(1800L, 4200L)
+              val delays = listOf(1600L, 3400L, 5000L)
               delays.forEachIndexed { idx, delayMs ->
                 handler.postDelayed(
                   {
-                    if (idx == 1) {
-                      view.evaluateJavascript("window.scrollBy(0, 500);", null)
+                    when (idx) {
+                      1 -> view.evaluateJavascript("window.scrollBy(0, 450);", null)
+                      2 -> view.evaluateJavascript("window.scrollBy(0, 950);", null)
                     }
                     extractChannelPostsFromWebView(view, target.platform) { posts ->
                       if (posts.isNotEmpty()) {
@@ -237,6 +240,7 @@ fun ChannelWebViewReader(
   if (LocalInspectionMode.current) return
 
   val context = LocalContext.current
+  val isDarkTheme = isSystemInDarkTheme()
   val palette = LocalPlatformColors.current
   val accent =
     when (channel.platform) {
@@ -269,7 +273,7 @@ fun ChannelWebViewReader(
           )
         configureChannelWebView(this, channel.platform)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-          settings.isAlgorithmicDarkeningAllowed = true
+          settings.isAlgorithmicDarkeningAllowed = isDarkTheme
         }
         webChromeClient =
           object : WebChromeClient() {
@@ -557,6 +561,39 @@ fun ChannelWebViewReader(
       }
     }
 
+    if (channel.platform == ChannelPlatform.WHATSAPP && !loadError && !renderCrashFallback) {
+      Surface(
+        color = accent.container.copy(alpha = 0.55f),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          Text(
+            text = stringResource(R.string.whatsapp_web_limitation_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+          )
+          TextButton(
+            onClick = onOpenExternal,
+            modifier = Modifier.heightIn(min = 48.dp),
+          ) {
+            Text(
+              text = stringResource(R.string.action_open_short),
+              style = MaterialTheme.typography.labelMedium,
+              color = accent.foreground,
+              maxLines = 1,
+              softWrap = false,
+            )
+          }
+        }
+      }
+      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    }
+
     if (webView == null || renderCrashFallback || loadError) {
       Box(
         modifier = Modifier.weight(1f).fillMaxWidth().padding(24.dp),
@@ -623,6 +660,11 @@ fun ChannelWebViewReader(
     } else {
       AndroidView(
         factory = { webView },
+        update = { view ->
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            view.settings.isAlgorithmicDarkeningAllowed = isDarkTheme
+          }
+        },
         modifier = Modifier.weight(1f).fillMaxWidth().testTag("webview_${channel.id}"),
       )
     }
@@ -699,9 +741,30 @@ private fun extractChannelPostsFromWebView(
         for (var i = 0; i < nodes.length && out.length < 25; i++) {
           var el = nodes[i];
           if (isTelegram) {
+            var nl = String.fromCharCode(10);
+            var parts = [];
             var txtEl = el.querySelector(".tgme_widget_message_text");
-            var t = txtEl ? (txtEl.innerText || "").trim() : "";
-            var photoEl = el.querySelector(".tgme_widget_message_photo_wrap");
+            var txt = txtEl ? (txtEl.innerText || "").trim() : "";
+            if (txt) parts.push(txt);
+            var pollQ = el.querySelector(".tgme_widget_message_poll_question");
+            if (pollQ) {
+              var qText = (pollQ.innerText || "").trim();
+              if (qText) {
+                var opts = el.querySelectorAll(".tgme_widget_message_poll_option_text");
+                var optList = [];
+                for (var oi = 0; oi < opts.length; oi++) {
+                  var ot = (opts[oi].innerText || "").trim();
+                  if (ot) optList.push("• " + ot);
+                }
+                parts.push(optList.length ? (qText + nl + optList.join(nl)) : qText);
+              }
+            }
+            var lpTitle = el.querySelector(".tgme_widget_message_link_preview_title");
+            var lpDesc = el.querySelector(".tgme_widget_message_link_preview_description");
+            var lpCombined = [lpTitle ? (lpTitle.innerText || "").trim() : "", lpDesc ? (lpDesc.innerText || "").trim() : ""].filter(Boolean).join(nl);
+            if (lpCombined && (!txt || txt.indexOf(lpCombined) === -1)) parts.push(lpCombined);
+            var t = parts.join(nl + nl).trim();
+            var photoEl = el.querySelector(".tgme_widget_message_photo_wrap, .tgme_widget_message_video_thumb");
             var bg = photoEl ? (photoEl.style.backgroundImage || "") : "";
             var m = bg.match(/url\(['"]?(https:\/\/[^'")]+)['"]?\)/i);
             var imgUrl = m ? m[1] : null;

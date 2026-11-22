@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.ChannelFeedRepository
+import com.example.data.FeedCacheRepository
 import com.example.data.PostDeduplicator
 import com.example.data.ResponseRepository
 import com.example.data.UserPreferencesRepository
@@ -44,6 +45,7 @@ data class ProjectPiUiState(
   val submittingPostKeys: Set<String> = emptySet(),
   val responseError: String? = null,
   val isRefreshing: Boolean = false,
+  val lastSyncedAtMs: Long? = null,
   val syncGeneration: Int = 1,
   val searchQuery: String = "",
   val selectedChannelForDetail: CommunityChannel? = null,
@@ -57,6 +59,7 @@ class ProjectPiViewModel(
   private val responseRepository: ResponseRepository,
   private val currentUserId: String,
   private val feedRepository: ChannelFeedRepository = ChannelFeedRepository(),
+  private val feedCacheRepository: FeedCacheRepository? = null,
 ) : ViewModel() {
 
   private val selectedTab = MutableStateFlow(AppTab.UPDATES)
@@ -65,6 +68,7 @@ class ProjectPiViewModel(
   private val selectedFeedFilter = MutableStateFlow(FeedFilter.ALL)
   private val webExtractedPosts = MutableStateFlow<Map<ChannelPlatform, List<FeedPost>>>(emptyMap())
   private val isRefreshing = MutableStateFlow(false)
+  private val lastSyncedAtMs = MutableStateFlow<Long?>(null)
   private val syncGeneration = MutableStateFlow(1)
   private val searchQuery = MutableStateFlow("")
   private val selectedChannelForDetail = MutableStateFlow<CommunityChannel?>(null)
@@ -79,6 +83,7 @@ class ProjectPiViewModel(
     val selectedFeedFilter: FeedFilter,
     val webExtractedPosts: Map<ChannelPlatform, List<FeedPost>>,
     val isRefreshing: Boolean,
+    val lastSyncedAtMs: Long?,
     val syncGeneration: Int,
   )
 
@@ -90,13 +95,14 @@ class ProjectPiViewModel(
 
   private val feedSyncFlow =
     combine(
-      feedState,
-      selectedFeedFilter,
-      webExtractedPosts,
-      isRefreshing,
-      syncGeneration,
-    ) { state, filter, extracted, refreshing, generation ->
-      FeedSyncMeta(state, filter, extracted, refreshing, generation)
+      combine(feedState, selectedFeedFilter, webExtractedPosts) { state, filter, extracted ->
+        Triple(state, filter, extracted)
+      },
+      combine(isRefreshing, lastSyncedAtMs, syncGeneration) { refreshing, syncedAt, generation ->
+        Triple(refreshing, syncedAt, generation)
+      },
+    ) { (state, filter, extracted), (refreshing, syncedAt, generation) ->
+      FeedSyncMeta(state, filter, extracted, refreshing, syncedAt, generation)
     }
 
   private val responsesStreamFlow: StateFlow<ResponsesMeta> =
@@ -167,6 +173,7 @@ class ProjectPiViewModel(
           submittingPostKeys = respMeta.submitting,
           responseError = respMeta.error,
           isRefreshing = syncMeta.isRefreshing,
+          lastSyncedAtMs = syncMeta.lastSyncedAtMs,
           syncGeneration = syncMeta.syncGeneration,
           searchQuery = query,
           selectedChannelForDetail = detail,
@@ -179,13 +186,28 @@ class ProjectPiViewModel(
       )
 
   init {
-    refreshFeed(incrementGeneration = false)
+    viewModelScope.launch {
+      val cached = feedCacheRepository?.loadSnapshot()
+      if (cached != null) {
+        if (cached.webExtractedPosts.isNotEmpty() && webExtractedPosts.value.isEmpty()) {
+          webExtractedPosts.value = cached.webExtractedPosts
+        }
+        if (feedState.value !is FeedLoadState.Ready) {
+          feedState.value =
+            FeedLoadState.Ready(posts = cached.basePosts, previews = cached.previews)
+        }
+        if (cached.lastUpdatedMs > 0L && lastSyncedAtMs.value == null) {
+          lastSyncedAtMs.value = cached.lastUpdatedMs
+        }
+      }
+      refreshFeed(incrementGeneration = false)
+    }
   }
 
   fun setForeground(isForeground: Boolean) {
     if (isForeground) {
       val elapsed = System.currentTimeMillis() - lastSyncTimeMs
-      if (elapsed >= 30_000L) {
+      if (elapsed >= FOREGROUND_RESYNC_THRESHOLD_MS) {
         refreshFeed(incrementGeneration = true)
       }
       startAutoSyncLoop()
@@ -228,13 +250,20 @@ class ProjectPiViewModel(
         feedState.value = FeedLoadState.Loading
       }
       val bundle = feedRepository.fetchLiveContent()
-      lastSyncTimeMs = System.currentTimeMillis()
-      feedState.value =
-        if (bundle.hadAnyNetworkSuccess) {
-          FeedLoadState.Ready(posts = bundle.posts, previews = bundle.previews)
-        } else {
-          FeedLoadState.Error()
-        }
+      val now = System.currentTimeMillis()
+      lastSyncTimeMs = now
+      if (bundle.hadAnyNetworkSuccess) {
+        lastSyncedAtMs.value = now
+        feedState.value = FeedLoadState.Ready(posts = bundle.posts, previews = bundle.previews)
+        feedCacheRepository?.saveSnapshot(
+          basePosts = bundle.posts,
+          webExtractedPosts = webExtractedPosts.value,
+          previews = bundle.previews,
+          lastUpdatedMs = now,
+        )
+      } else if (feedState.value !is FeedLoadState.Ready) {
+        feedState.value = FeedLoadState.Error()
+      }
       isRefreshing.value = false
     }
   }
@@ -258,7 +287,21 @@ class ProjectPiViewModel(
         )
       }
     val dedupedForPlatform = PostDeduplicator.mergeAndDeduplicate(mapped)
-    webExtractedPosts.value = webExtractedPosts.value + (platform to dedupedForPlatform)
+    val updatedMap = webExtractedPosts.value + (platform to dedupedForPlatform)
+    webExtractedPosts.value = updatedMap
+    val now = System.currentTimeMillis()
+    lastSyncedAtMs.value = now
+    val ready = feedState.value as? FeedLoadState.Ready
+    if (ready != null) {
+      viewModelScope.launch {
+        feedCacheRepository?.saveSnapshot(
+          basePosts = ready.posts,
+          webExtractedPosts = updatedMap,
+          previews = ready.previews,
+          lastUpdatedMs = now,
+        )
+      }
+    }
   }
 
   fun saveResponse(
@@ -345,7 +388,8 @@ class ProjectPiViewModel(
 
   companion object {
     private const val TAG = "ProjectPiVM"
-    private const val AUTO_SYNC_INTERVAL_MS = 60_000L
+    private const val AUTO_SYNC_INTERVAL_MS = 45_000L
+    private const val FOREGROUND_RESYNC_THRESHOLD_MS = 15_000L
 
     fun computeUnifiedFeed(
       basePosts: List<FeedPost>,

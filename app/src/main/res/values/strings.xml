@@ -10,6 +10,7 @@
     <string name="feed_search_placeholder">Search across all channels…</string>
     <string name="sync_status_syncing">Syncing all channels…</string>
     <string name="sync_status_live">Auto-sync active</string>
+    <string name="sync_status_updated">Auto-synced • %1$s</string>
 
     <string name="nav_updates">Updates</string>
     <string name="nav_whatsapp">WhatsApp</string>
@@ -44,8 +45,9 @@
     <string name="retry">Retry</string>
     <string name="subscribers_label">%1$s subscribers</string>
     <string name="live_channel_badge">Live Channel</string>
-    <string name="channel_sync_hint_title">Want WhatsApp &amp; Facebook posts in this feed?</string>
-    <string name="channel_sync_hint_body">Public previews load automatically when accessible. If a platform asks to open or sign in, view its tab once inside Project π to sync posts here.</string>
+    <string name="channel_sync_hint_title">Sync more channels into Unified Updates</string>
+    <string name="channel_sync_hint_body">Telegram syncs automatically. Open Facebook once inside Project π (or sign in) to sync full Facebook posts, and open WhatsApp to view direct channel broadcasts.</string>
+    <string name="whatsapp_web_limitation_hint">WhatsApp web only shows channel info here. Tap Open to read channel posts in WhatsApp.</string>
     <string name="toggle_search">Search updates</string>
 
     <string name="badge_verified">Verified</string>

@@ -5,13 +5,15 @@ import com.example.model.FeedPost
 
 object PostDeduplicator {
   private val URL_REGEX = Regex("""https?://\S+""", RegexOption.IGNORE_CASE)
+  private val MENTION_TAG_REGEX = Regex("""[@#][\p{L}\p{N}_]+""")
   private val PUNCT_REGEX = Regex("""[^\p{L}\p{N}\s]""")
   private val MULTI_SPACE_REGEX = Regex("""\s+""")
 
   fun normalizeForDedup(text: String): String {
     if (text.isBlank()) return ""
     val withoutUrls = URL_REGEX.replace(text, " ")
-    val cleaned = PUNCT_REGEX.replace(withoutUrls, " ")
+    val withoutTags = MENTION_TAG_REGEX.replace(withoutUrls, " ")
+    val cleaned = PUNCT_REGEX.replace(withoutTags, " ")
     return MULTI_SPACE_REGEX.replace(cleaned, " ").trim().lowercase()
   }
 
@@ -23,8 +25,8 @@ object PostDeduplicator {
 
     val shorter = if (normA.length <= normB.length) normA else normB
     val longer = if (normA.length > normB.length) normA else normB
-    if (shorter.length >= 24 && longer.contains(shorter)) {
-      if (shorter.length.toDouble() / longer.length.toDouble() >= 0.72) {
+    if (shorter.length >= 12 && longer.contains(shorter)) {
+      if (shorter.length.toDouble() / longer.length.toDouble() >= 0.70) {
         return true
       }
     }
@@ -37,7 +39,7 @@ object PostDeduplicator {
     val union = tokensA.union(tokensB).size
     if (union == 0) return false
     val jaccard = intersection.toDouble() / union.toDouble()
-    return jaccard >= 0.78
+    return jaccard >= 0.68
   }
 
   fun mergeAndDeduplicate(posts: List<FeedPost>): List<FeedPost> {
@@ -50,8 +52,8 @@ object PostDeduplicator {
           val sameImage =
             !existing.imageUrl.isNullOrBlank() &&
               existing.imageUrl == incoming.imageUrl &&
-              existing.text.isBlank() &&
-              incoming.text.isBlank()
+              ((existing.text.isBlank() && incoming.text.isBlank()) ||
+                areDuplicates(existing.text, incoming.text))
 
           val differentOrSameExact =
             existing.platforms.intersect(incoming.platforms.toSet()).isEmpty() ||
@@ -79,7 +81,12 @@ object PostDeduplicator {
     val bestImage = existing.imageUrl ?: incoming.imageUrl
     val bestViews = existing.viewCount ?: incoming.viewCount
     val bestTimestamp =
-      if (existing.timestampLabel == "Live Channel" || existing.timestampLabel == "Synced live") {
+      if (
+        existing.timestampLabel == "Live Channel" ||
+          existing.timestampLabel == "Synced live" ||
+          existing.timestampLabel == "Facebook" ||
+          existing.timestampLabel == "WhatsApp Channel"
+      ) {
         incoming.timestampLabel
       } else {
         existing.timestampLabel

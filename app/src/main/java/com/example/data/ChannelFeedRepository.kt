@@ -1,6 +1,5 @@
 package com.example.data
 
-import androidx.core.text.HtmlCompat
 import com.example.model.ChannelPlatform
 import com.example.model.ChannelPreviewInfo
 import com.example.model.FeedPost
@@ -149,15 +148,23 @@ class ChannelFeedRepository(
     private val TELEGRAM_SUBS_REGEX =
       Regex("""class="counter_value">([^<]+)</span>\s*<span class="counter_type">subscribers</span>""", RegexOption.DOT_MATCHES_ALL)
     private val TELEGRAM_POST_SPLIT = "<div class=\"tgme_widget_message_wrap"
-    private val DATA_POST_REGEX = Regex("""data-post="([^"]+)"""")
+    private val DATA_POST_REGEX = Regex("""data-post=["']([^"']+)["']""")
     private val MESSAGE_TEXT_REGEX =
       Regex("""class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>""", RegexOption.DOT_MATCHES_ALL)
+    private val MESSAGE_POLL_Q_REGEX =
+      Regex("""class="tgme_widget_message_poll_question"[^>]*>(.*?)</div>""", RegexOption.DOT_MATCHES_ALL)
+    private val MESSAGE_POLL_OPT_REGEX =
+      Regex("""class="tgme_widget_message_poll_option_text"[^>]*>(.*?)</div>""", RegexOption.DOT_MATCHES_ALL)
+    private val MESSAGE_LINK_TITLE_REGEX =
+      Regex("""class="tgme_widget_message_link_preview_title"[^>]*>(.*?)</div>""", RegexOption.DOT_MATCHES_ALL)
+    private val MESSAGE_LINK_DESC_REGEX =
+      Regex("""class="tgme_widget_message_link_preview_description"[^>]*>(.*?)</div>""", RegexOption.DOT_MATCHES_ALL)
     private val MESSAGE_TIME_REGEX =
       Regex("""<time[^>]*datetime="([^"]+)"[^>]*>([^<]*)</time>""", RegexOption.DOT_MATCHES_ALL)
     private val MESSAGE_VIEWS_REGEX =
       Regex("""class="tgme_widget_message_views">([^<]+)</span>""")
     private val MESSAGE_PHOTO_REGEX =
-      Regex("""tgme_widget_message_photo_wrap[^>]*style="[^"]*background-image:url\(['"]?([^'")]+)['"]?\)""")
+      Regex("""(?:tgme_widget_message_photo_wrap|tgme_widget_message_video_thumb)[^>]*style="[^"]*background-image:url\(['"]?([^'")]+)['"]?\)""")
 
     private val META_TAG_REGEX = Regex("""<meta\b[^>]*>""", RegexOption.IGNORE_CASE)
     private val ATTR_PROPERTY_REGEX =
@@ -170,6 +177,12 @@ class ChannelFeedRepository(
       Regex(
         """"(?:articleBody|headline|description|message|caption|body|text)"\s*:\s*(?:\{\s*"text"\s*:\s*)?"((?:\\.|[^"\\]){16,1500})""""
       )
+    private val FOLLOWERS_COUNT_REGEX =
+      Regex("""\b([\d.,]+[KkMm]?)\s+followers?\b""", RegexOption.IGNORE_CASE)
+    private val BR_TAG_REGEX = Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE)
+    private val BLOCK_END_TAG_REGEX = Regex("""</(?:p|div|li|h[1-6])>""", RegexOption.IGNORE_CASE)
+    private val HTML_TAG_REGEX = Regex("""<[^>]+>""")
+    private val NUMERIC_ENTITY_REGEX = Regex("""&#(x?[0-9a-fA-F]+);""")
 
     private val GENERIC_BOILERPLATE_PHRASES =
       listOf(
@@ -183,6 +196,8 @@ class ChannelFeedRepository(
         "download whatsapp",
         "whatsapp channel invite",
         "follow this channel on whatsapp",
+        "followers for the latest updates",
+        "whatsapp channel.",
         "open app",
         "terms of service",
         "privacy policy",
@@ -229,10 +244,41 @@ class ChannelFeedRepository(
         chunks.drop(1).mapNotNull { chunk ->
           val dataPost = DATA_POST_REGEX.find(chunk)?.groupValues?.getOrNull(1) ?: return@mapNotNull null
           val rawText = MESSAGE_TEXT_REGEX.find(chunk)?.groupValues?.getOrNull(1)
-          val text = rawText?.let(::cleanHtmlText).orEmpty()
+          val baseText = rawText?.let(::cleanHtmlText).orEmpty()
+          val pollQuestion =
+            MESSAGE_POLL_Q_REGEX.find(chunk)?.groupValues?.getOrNull(1)?.let(::cleanHtmlText)
+          val pollOptions =
+            MESSAGE_POLL_OPT_REGEX.findAll(chunk)
+              .map { "• " + cleanHtmlText(it.groupValues[1]) }
+              .filter { it.length > 2 }
+              .toList()
+          val linkTitle =
+            MESSAGE_LINK_TITLE_REGEX.find(chunk)?.groupValues?.getOrNull(1)?.let(::cleanHtmlText)
+          val linkDesc =
+            MESSAGE_LINK_DESC_REGEX.find(chunk)?.groupValues?.getOrNull(1)?.let(::cleanHtmlText)
+
+          val combinedText =
+            buildString {
+              if (baseText.isNotBlank()) append(baseText)
+              if (!pollQuestion.isNullOrBlank()) {
+                if (isNotEmpty()) append("\n\n")
+                append(pollQuestion)
+                if (pollOptions.isNotEmpty()) {
+                  append("\n")
+                  append(pollOptions.joinToString("\n"))
+                }
+              } else if (baseText.isBlank() && !linkTitle.isNullOrBlank()) {
+                append(linkTitle)
+                if (!linkDesc.isNullOrBlank()) {
+                  append("\n")
+                  append(linkDesc)
+                }
+              }
+            }.trim()
+
           val imageUrl = MESSAGE_PHOTO_REGEX.find(chunk)?.groupValues?.getOrNull(1)
 
-          if (text.isBlank() && imageUrl == null) return@mapNotNull null
+          if (combinedText.isBlank() && imageUrl == null) return@mapNotNull null
 
           val timeMatch = MESSAGE_TIME_REGEX.find(chunk)
           val isoDate = timeMatch?.groupValues?.getOrNull(1)
@@ -246,7 +292,7 @@ class ChannelFeedRepository(
             platforms = listOf(ChannelPlatform.TELEGRAM),
             platformUrls = mapOf(ChannelPlatform.TELEGRAM to postUrl),
             channelTitle = channelTitle,
-            text = text,
+            text = combinedText,
             timestampLabel = timestampLabel,
             viewCount = views,
             imageUrl = imageUrl,
@@ -330,7 +376,7 @@ class ChannelFeedRepository(
               channelTitle = usefulTitle,
               text = body,
               timestampLabel = "Facebook",
-              imageUrl = if (idx == 0) og.imageUrl else null,
+              imageUrl = null,
               primaryUrl = resolvedUrl,
               isLiveChannelCard = false,
             )
@@ -345,7 +391,7 @@ class ChannelFeedRepository(
             channelTitle = usefulTitle,
             text = usefulDesc,
             timestampLabel = "Facebook",
-            imageUrl = og.imageUrl,
+            imageUrl = null,
             primaryUrl = resolvedUrl,
             isLiveChannelCard = true,
           )
@@ -378,10 +424,14 @@ class ChannelFeedRepository(
         }
       }
 
+      val followerCount =
+        description?.let { FOLLOWERS_COUNT_REGEX.find(it)?.groupValues?.getOrNull(1) }
+
       return ChannelPreviewInfo(
         channelId = channelId,
         liveTitle = title?.takeUnless(::isGenericBoilerplate),
         liveDescription = description?.takeUnless(::isGenericBoilerplate),
+        subscriberCount = followerCount,
         imageUrl = image,
         resolvedUrl = resolvedUrl,
       )
@@ -431,14 +481,44 @@ class ChannelFeedRepository(
     }
 
     private fun cleanHtmlText(rawHtml: String): String {
-      return HtmlCompat.fromHtml(rawHtml, HtmlCompat.FROM_HTML_MODE_COMPACT)
-        .toString()
+      val withLineBreaks =
+        rawHtml
+          .replace(BR_TAG_REGEX, "\n")
+          .replace(BLOCK_END_TAG_REGEX, "\n")
+      val stripped = HTML_TAG_REGEX.replace(withLineBreaks, "")
+      return decodeEntities(stripped)
+        .replace(Regex("[ \t]+\n"), "\n")
         .replace(Regex("\\n{3,}"), "\n\n")
         .trim()
     }
 
-    private fun decodeEntities(raw: String): String =
-      HtmlCompat.fromHtml(raw, HtmlCompat.FROM_HTML_MODE_LEGACY).toString().trim()
+    private fun decodeEntities(raw: String): String {
+      val named =
+        raw
+          .replace("&nbsp;", " ")
+          .replace("&amp;", "&")
+          .replace("&lt;", "<")
+          .replace("&gt;", ">")
+          .replace("&quot;", "\"")
+          .replace("&#39;", "'")
+          .replace("&apos;", "'")
+      return NUMERIC_ENTITY_REGEX
+        .replace(named) { match ->
+          val token = match.groupValues[1]
+          val codePoint =
+            if (token.startsWith("x", ignoreCase = true)) {
+              token.substring(1).toIntOrNull(16)
+            } else {
+              token.toIntOrNull(10)
+            }
+          if (codePoint != null && Character.isValidCodePoint(codePoint)) {
+            String(Character.toChars(codePoint))
+          } else {
+            match.value
+          }
+        }
+        .trim()
+    }
 
     private fun formatTimestampLabel(isoDate: String?, shortTime: String): String {
       if (isoDate != null && isoDate.length >= 10) {

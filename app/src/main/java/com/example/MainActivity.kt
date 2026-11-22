@@ -21,6 +21,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.example.data.FeedCacheRepository
 import com.example.data.ResponseRepository
 import com.example.data.UserPreferencesRepository
 import com.example.ui.AuthScreen
@@ -92,6 +93,7 @@ private fun AuthenticatedProjectPiApp(currentUserId: String) {
               preferencesRepository = UserPreferencesRepository(app.applicationContext),
               responseRepository = ResponseRepository(db),
               currentUserId = currentUserId,
+              feedCacheRepository = FeedCacheRepository(app.applicationContext),
             )
           }
         },

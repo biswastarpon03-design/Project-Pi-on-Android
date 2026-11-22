@@ -240,14 +240,22 @@ fun ProjectPiScreen(
                     style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onBackground,
                   )
+                  val syncSubtitle =
+                    when {
+                      uiState.isRefreshing -> stringResource(R.string.sync_status_syncing)
+                      uiState.lastSyncedAtMs != null ->
+                        stringResource(
+                          R.string.sync_status_updated,
+                          formatSyncTimeAgo(uiState.lastSyncedAtMs),
+                        )
+                      else -> stringResource(R.string.sync_status_live)
+                    }
                   Text(
-                    text =
-                      stringResource(
-                        if (uiState.isRefreshing) R.string.sync_status_syncing
-                        else R.string.sync_status_live
-                      ),
+                    text = syncSubtitle,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.tertiary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                   )
                 }
               }
@@ -659,7 +667,7 @@ private fun ChannelQuickStrip(
       val subs = previews[channel.id]?.subscriberCount
       val statusText =
         when {
-          count > 0 -> "$count synced"
+          count > 0 -> "$count posts"
           subs != null -> "$subs subs"
           else -> "Live tab"
         }
@@ -895,6 +903,16 @@ private fun LazyListScope.feedBodyItems(
         onOpenExternal = { onOpenPost(post) },
       )
     }
+  }
+}
+
+private fun formatSyncTimeAgo(syncedAtMs: Long): String {
+  val diffMs = (System.currentTimeMillis() - syncedAtMs).coerceAtLeast(0L)
+  val mins = diffMs / 60_000L
+  return when {
+    mins < 1L -> "Just now"
+    mins < 60L -> "${mins}m ago"
+    else -> "${mins / 60L}h ago"
   }
 }
 
