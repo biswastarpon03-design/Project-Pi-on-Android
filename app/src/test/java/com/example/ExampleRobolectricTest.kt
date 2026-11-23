@@ -131,7 +131,7 @@ class ExampleRobolectricTest {
       """.trimIndent()
     val fbBoilerplate = ChannelFeedRepository.parseFacebookChannelHtml(fbBoilerplateHtml)
     assertNull(fbBoilerplate.preview.liveTitle)
-    assertEquals(0, fbBoilerplate.posts.size)
+    assertTrue(fbBoilerplate.posts.all { it.isLiveChannelCard })
     assertTrue(ChannelFeedRepository.isGenericBoilerplate("কমেন্ট করুন"))
     assertTrue(ChannelFeedRepository.isGenericBoilerplate("লগ ইন করুন"))
     assertEquals(
@@ -195,6 +195,7 @@ class ExampleRobolectricTest {
           ),
         selectedFilter = FeedFilter.ALL,
         searchQuery = "",
+        deduplicateCrossPlatform = true,
       )
     assertEquals(2, computed.filteredPosts.size)
     assertEquals(
@@ -467,5 +468,128 @@ class ExampleRobolectricTest {
       .onNodeWithText(context.getString(R.string.auth_error_cancelled))
       .assertIsDisplayed()
     assertEquals(listOf(FirebaseAuthErrorHandler.TAG), loggedTags)
+  }
+
+  @Test
+  fun `auth screen supports Log In, Create Account with Email OTP, and Forgot Password`() {
+    var authSuccessCount = 0
+    var lastOtpEmail = ""
+    var lastOtpPurpose: com.example.data.OtpPurpose? = null
+    var lastRegisteredUsername = ""
+    var lastLoggedInEmail = ""
+    var lastResetEmail = ""
+
+    val fakeOtpRepo =
+      object : com.example.data.OtpAuthRepository {
+        override suspend fun warmUpServer() {}
+
+        override suspend fun sendEmailOtp(
+          email: String,
+          purpose: com.example.data.OtpPurpose,
+        ): Result<com.example.data.SendOtpResponse> {
+          lastOtpEmail = email
+          lastOtpPurpose = purpose
+          return Result.success(com.example.data.SendOtpResponse(message = "Sent", retryAfterSeconds = 45))
+        }
+
+        override suspend fun registerWithEmailOtp(
+          email: String,
+          username: String,
+          password: String,
+          otp: String,
+        ): Result<com.example.data.AccountAuthResponse> {
+          lastRegisteredUsername = username
+          return Result.success(
+            com.example.data.AccountAuthResponse(
+              customToken = "tok",
+              username = username,
+              email = email,
+            )
+          )
+        }
+
+        override suspend fun loginWithEmailPassword(
+          email: String,
+          password: String,
+        ): Result<com.example.data.AccountAuthResponse> {
+          lastLoggedInEmail = email
+          return Result.success(com.example.data.AccountAuthResponse(customToken = "tok", email = email))
+        }
+
+        override suspend fun resetPasswordWithOtp(
+          email: String,
+          otp: String,
+          newPassword: String,
+        ): Result<com.example.data.AccountAuthResponse> {
+          lastResetEmail = email
+          return Result.success(com.example.data.AccountAuthResponse(customToken = "tok", email = email))
+        }
+      }
+
+    composeTestRule.setContent {
+      ProjectPiTheme(darkTheme = false) {
+        com.example.ui.AuthScreen(
+          onAuthSuccess = { authSuccessCount += 1 },
+          otpAuthRepository = fakeOtpRepo,
+          enableAutoSignIn = false,
+        )
+      }
+    }
+
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
+
+    // Test Log In flow
+    composeTestRule.onNodeWithTag("login_email_input").performScrollTo().performTextInput("student@example.com")
+    composeTestRule.onNodeWithTag("login_password_input").performScrollTo().performTextInput("Pass12345")
+    composeTestRule.onNodeWithTag("login_submit_button").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("student@example.com", lastLoggedInEmail)
+    assertEquals(1, authSuccessCount)
+
+    // Test Create Account + Email OTP flow
+    composeTestRule.onNodeWithTag("auth_mode_signup").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("signup_username_input").performScrollTo().performTextInput("PiScholar")
+    composeTestRule.onNodeWithTag("signup_send_otp_button").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("student@example.com", lastOtpEmail)
+    assertEquals(com.example.data.OtpPurpose.SIGNUP, lastOtpPurpose)
+    composeTestRule.onNodeWithTag("auth_status_banner").performScrollTo().assertIsDisplayed()
+
+    composeTestRule.onNodeWithTag("signup_otp_input").performScrollTo().performTextInput("482910")
+    composeTestRule.onNodeWithTag("signup_submit_button").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("PiScholar", lastRegisteredUsername)
+    assertEquals(2, authSuccessCount)
+
+    // Test Forgot Password + Reset OTP flow
+    composeTestRule.onNodeWithTag("auth_mode_login").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("forgot_password_button").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("reset_otp_input").performScrollTo().performTextInput("654321")
+    composeTestRule.onNodeWithTag("reset_submit_button").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("student@example.com", lastResetEmail)
+    assertEquals(3, authSuccessCount)
+  }
+
+  @Test
+  fun `HttpOtpAuthRepository parses customToken JSON responses safely`() {
+    val validJson =
+      org.json.JSONObject()
+        .put("ok", true)
+        .put("customToken", "fake-jwt-token")
+        .put("username", "PiLearner")
+    val success = com.example.data.HttpOtpAuthRepository.parseTokenResponse(validJson)
+    assertTrue(success.isSuccess)
+    assertEquals("fake-jwt-token", success.getOrThrow().customToken)
+    assertEquals("PiLearner", success.getOrThrow().username)
+
+    val invalidJson = org.json.JSONObject().put("ok", false).put("error", "Invalid OTP")
+    val failure = com.example.data.HttpOtpAuthRepository.parseTokenResponse(invalidJson)
+    assertTrue(failure.isFailure)
+    assertEquals("Invalid OTP", failure.exceptionOrNull()?.message)
   }
 }

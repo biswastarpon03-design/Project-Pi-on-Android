@@ -286,7 +286,7 @@ class ProjectPiViewModel(
           isLiveChannelCard = false,
         )
       }
-    val dedupedForPlatform = PostDeduplicator.mergeAndDeduplicate(mapped)
+    val dedupedForPlatform = PostDeduplicator.deduplicateSamePlatformOnly(mapped)
     val updatedMap = webExtractedPosts.value + (platform to dedupedForPlatform)
     webExtractedPosts.value = updatedMap
     val now = System.currentTimeMillis()
@@ -396,39 +396,47 @@ class ProjectPiViewModel(
       webExtractedPosts: Map<ChannelPlatform, List<FeedPost>>,
       selectedFilter: FeedFilter,
       searchQuery: String,
+      deduplicateCrossPlatform: Boolean = false,
     ): UnifiedComputation {
-      val waPosts =
-        webExtractedPosts[ChannelPlatform.WHATSAPP]?.takeIf { it.isNotEmpty() }
-          ?: basePosts.filter { ChannelPlatform.WHATSAPP in it.platforms }
-      val tgPosts =
-        webExtractedPosts[ChannelPlatform.TELEGRAM]?.takeIf { it.isNotEmpty() }
-          ?: basePosts.filter { ChannelPlatform.TELEGRAM in it.platforms }
-      val fbPosts =
-        webExtractedPosts[ChannelPlatform.FACEBOOK]?.takeIf { it.isNotEmpty() }
-          ?: basePosts.filter { ChannelPlatform.FACEBOOK in it.platforms }
+      fun collectForPlatform(platform: ChannelPlatform): List<FeedPost> {
+        val webReal = webExtractedPosts[platform].orEmpty().filter { !it.isLiveChannelCard }
+        val baseAll = basePosts.filter { platform in it.platforms }
+        val baseReal = baseAll.filter { !it.isLiveChannelCard }
+        val combinedReal = PostDeduplicator.deduplicateSamePlatformOnly(webReal + baseReal)
+        return combinedReal.ifEmpty { baseAll }
+      }
+
+      val waPosts = collectForPlatform(ChannelPlatform.WHATSAPP)
+      val tgPosts = collectForPlatform(ChannelPlatform.TELEGRAM)
+      val fbPosts = collectForPlatform(ChannelPlatform.FACEBOOK)
 
       val interleaved = ChannelFeedRepository.interleaveChannelPosts(waPosts, tgPosts, fbPosts)
-      val deduplicatedAll = PostDeduplicator.mergeAndDeduplicate(interleaved)
+      val unifiedAll =
+        if (deduplicateCrossPlatform) {
+          PostDeduplicator.mergeAndDeduplicate(interleaved)
+        } else {
+          PostDeduplicator.deduplicateSamePlatformOnly(interleaved)
+        }
 
       val counts =
         mapOf(
           ChannelPlatform.WHATSAPP to
-            deduplicatedAll.count { ChannelPlatform.WHATSAPP in it.platforms },
+            unifiedAll.count { ChannelPlatform.WHATSAPP in it.platforms },
           ChannelPlatform.TELEGRAM to
-            deduplicatedAll.count { ChannelPlatform.TELEGRAM in it.platforms },
+            unifiedAll.count { ChannelPlatform.TELEGRAM in it.platforms },
           ChannelPlatform.FACEBOOK to
-            deduplicatedAll.count { ChannelPlatform.FACEBOOK in it.platforms },
+            unifiedAll.count { ChannelPlatform.FACEBOOK in it.platforms },
         )
 
       val platformFiltered =
         when (selectedFilter) {
-          FeedFilter.ALL -> deduplicatedAll
+          FeedFilter.ALL -> unifiedAll
           FeedFilter.WHATSAPP ->
-            deduplicatedAll.filter { ChannelPlatform.WHATSAPP in it.platforms }
+            unifiedAll.filter { ChannelPlatform.WHATSAPP in it.platforms }
           FeedFilter.TELEGRAM ->
-            deduplicatedAll.filter { ChannelPlatform.TELEGRAM in it.platforms }
+            unifiedAll.filter { ChannelPlatform.TELEGRAM in it.platforms }
           FeedFilter.FACEBOOK ->
-            deduplicatedAll.filter { ChannelPlatform.FACEBOOK in it.platforms }
+            unifiedAll.filter { ChannelPlatform.FACEBOOK in it.platforms }
         }
 
       val q = searchQuery.trim()

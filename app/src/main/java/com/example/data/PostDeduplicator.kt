@@ -42,6 +42,31 @@ object PostDeduplicator {
     return jaccard >= 0.68
   }
 
+  fun deduplicateSamePlatformOnly(posts: List<FeedPost>): List<FeedPost> {
+    if (posts.isEmpty()) return emptyList()
+    val result = mutableListOf<FeedPost>()
+    for (incoming in posts) {
+      val matchIndex =
+        result.indexOfFirst { existing ->
+          existing.primaryPlatform == incoming.primaryPlatform &&
+            (existing.id == incoming.id ||
+              (existing.text.isNotBlank() &&
+                incoming.text.isNotBlank() &&
+                areDuplicates(existing.text, incoming.text)) ||
+              (!existing.imageUrl.isNullOrBlank() &&
+                existing.imageUrl == incoming.imageUrl &&
+                existing.text.isBlank() &&
+                incoming.text.isBlank()))
+        }
+      if (matchIndex == -1) {
+        result.add(incoming)
+      } else {
+        result[matchIndex] = mergePair(result[matchIndex], incoming)
+      }
+    }
+    return result
+  }
+
   fun mergeAndDeduplicate(posts: List<FeedPost>): List<FeedPost> {
     if (posts.isEmpty()) return emptyList()
     val merged = mutableListOf<FeedPost>()

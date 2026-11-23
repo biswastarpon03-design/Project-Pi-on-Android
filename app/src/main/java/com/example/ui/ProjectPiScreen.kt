@@ -667,7 +667,8 @@ private fun ChannelQuickStrip(
       val subs = previews[channel.id]?.subscriberCount
       val statusText =
         when {
-          count > 0 -> "$count posts"
+          count == 1 -> "1 post"
+          count > 1 -> "$count posts"
           subs != null -> "$subs subs"
           else -> "Live tab"
         }

@@ -108,6 +108,7 @@ fun BackgroundChannelSyncer(
   val telegramChannel = remember { ProjectPiChannels.forPlatform(ChannelPlatform.TELEGRAM) }
 
   var activeChannel by remember { mutableStateOf<CommunityChannel?>(null) }
+  var finishedChannelId by remember { mutableStateOf<String?>(null) }
   var mountSyncWebView by remember(syncGeneration) { mutableStateOf(false) }
   var completedGeneration by remember { mutableIntStateOf(0) }
 
@@ -137,14 +138,15 @@ fun BackgroundChannelSyncer(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT,
           )
-        configureChannelWebView(this, ChannelPlatform.WHATSAPP)
+        configureChannelWebView(this, ChannelPlatform.FACEBOOK)
         webViewClient =
           object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
               val target = activeChannel ?: return
               if (view == null) return
+              finishedChannelId = target.id
               runCatching { CookieManager.getInstance().flush() }
-              val delays = listOf(1600L, 3400L, 5000L)
+              val delays = listOf(1200L, 2800L, 4400L)
               delays.forEachIndexed { idx, delayMs ->
                 handler.postDelayed(
                   {
@@ -184,29 +186,30 @@ fun BackgroundChannelSyncer(
 
   if (webView == null) return
 
-  // Sequentially sync WhatsApp, Facebook, and (if needed) Telegram, then unmount hidden WebView
+  // Sequentially sync Facebook, Telegram (fallback), and WhatsApp, waiting for redirects to finish
   LaunchedEffect(syncGeneration, webView) {
-    handler.removeCallbacksAndMessages(null)
-    activeChannel = whatsappChannel
-    configureChannelUserAgent(webView, whatsappChannel.platform)
-    webView.loadUrl(whatsappChannel.inAppUrl)
+    suspend fun syncChannel(channel: CommunityChannel, url: String) {
+      handler.removeCallbacksAndMessages(null)
+      finishedChannelId = null
+      activeChannel = channel
+      configureChannelUserAgent(webView, channel.platform)
+      webView.loadUrl(url)
 
-    delay(6_000L)
+      var waitedMs = 0L
+      while (finishedChannelId != channel.id && waitedMs < 5_500L) {
+        delay(150L)
+        waitedMs += 150L
+      }
+      delay(4_800L)
+    }
 
-    handler.removeCallbacksAndMessages(null)
-    activeChannel = facebookChannel
-    configureChannelUserAgent(webView, facebookChannel.platform)
-    webView.loadUrl(facebookChannel.inAppUrl)
-
-    delay(6_000L)
+    syncChannel(facebookChannel, facebookChannel.inAppUrl)
 
     if (includeTelegramFallback) {
-      handler.removeCallbacksAndMessages(null)
-      activeChannel = telegramChannel
-      configureChannelUserAgent(webView, telegramChannel.platform)
-      webView.loadUrl(ProjectPiChannels.TELEGRAM_MIRROR_WEB_FEED_URL)
-      delay(5_500L)
+      syncChannel(telegramChannel, ProjectPiChannels.TELEGRAM_MIRROR_WEB_FEED_URL)
     }
+
+    syncChannel(whatsappChannel, whatsappChannel.inAppUrl)
 
     completedGeneration = syncGeneration
     mountSyncWebView = false
@@ -721,9 +724,9 @@ private fun extractChannelPostsFromWebView(
   val selector =
     when (platform) {
       ChannelPlatform.WHATSAPP ->
-        "[data-testid='msg-container'], [data-testid='channel-update-message'], div[data-id], div.copyable-text, span.selectable-text, div[role='listitem']"
+        "[data-testid='msg-container'], [data-testid='channel-update-message'], div[data-id], div.copyable-text, span.selectable-text, div[role='listitem'], [role='main'] div[dir='auto']"
       ChannelPlatform.FACEBOOK ->
-        "div[data-ad-preview='message'], div[data-ad-comet-preview='message'], div[data-testid='post_message'], div.userContent, div[role='article'] div[dir='auto']"
+        "div[data-ad-preview='message'], div[data-ad-comet-preview='message'], div[data-testid='post_message'], div.userContent, div[role='article'] div[dir='auto'], div[role='article'] span[dir='auto'], div[data-mcomponent='MContainer'] div[dir='auto']"
       ChannelPlatform.TELEGRAM -> ".tgme_widget_message"
     }
   val script =
@@ -737,7 +740,7 @@ private fun extractChannelPostsFromWebView(
         var nodes = document.querySelectorAll("$selector");
         var seen = {};
         var out = [];
-        var blocked = /log in to facebook|log into facebook|create new account|forgotten password|allow all cookies|decline optional cookies|we use cookies|cookie policy|terms of service|privacy policy|download whatsapp|get whatsapp|whatsapp web|help center|end-to-end encrypted|scan the qr code|see more on facebook|view channel in whatsapp|কমেন্ট করুন|লগ ইন করুন|নতুন অ্যাকাউন্ট|পাসওয়ার্ড ভুলে গেছেন|থেকে আরও দেখুন|মন্তব্য করুন/i;
+        var blocked = /log in to facebook|log into facebook|create new account|forgotten password|allow all cookies|decline optional cookies|we use cookies|cookie policy|terms of service|privacy policy|download whatsapp|get whatsapp|whatsapp web|help center|end-to-end encrypted|scan the qr code|see more on facebook|view channel in whatsapp|view in whatsapp|channel created|suggested for you|people also search|followers for the latest updates|কমেন্ট করুন|লগ ইন করুন|নতুন অ্যাকাউন্ট|পাসওয়ার্ড ভুলে গেছেন|থেকে আরও দেখুন|মন্তব্য করুন/i;
         for (var i = 0; i < nodes.length && out.length < 25; i++) {
           var el = nodes[i];
           if (isTelegram) {

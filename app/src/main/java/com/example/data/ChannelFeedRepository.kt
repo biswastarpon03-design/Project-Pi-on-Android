@@ -75,7 +75,23 @@ class ChannelFeedRepository(
       }
     }
     val whatsappPage = whatsappDeferred.await()
-    val facebookPage = facebookDeferred.await()
+    val initialFbPage = facebookDeferred.await()
+    var facebookPage = initialFbPage
+    if (initialFbPage != null &&
+      parseFacebookChannelHtml(initialFbPage.html, initialFbPage.resolvedUrl)
+        .posts
+        .none { !it.isLiveChannelCard }
+    ) {
+      val mobileCandidates = buildFacebookMobileUrls(initialFbPage.resolvedUrl)
+      for (candidate in mobileCandidates) {
+        val mPage = fetchHtml(candidate, MOBILE_USER_AGENT) ?: continue
+        val mParsed = parseFacebookChannelHtml(mPage.html, initialFbPage.resolvedUrl)
+        if (mParsed.posts.any { !it.isLiveChannelCard }) {
+          facebookPage = mPage
+          break
+        }
+      }
+    }
 
     val previews = mutableMapOf<String, ChannelPreviewInfo>()
     val whatsappPosts = mutableListOf<FeedPost>()
@@ -103,7 +119,7 @@ class ChannelFeedRepository(
     val combinedPosts = interleaveChannelPosts(whatsappPosts, telegramPosts, facebookPosts)
 
     LiveChannelBundle(
-      posts = PostDeduplicator.mergeAndDeduplicate(combinedPosts),
+      posts = PostDeduplicator.deduplicateSamePlatformOnly(combinedPosts),
       previews = previews,
       hadAnyNetworkSuccess =
         telegramPage != null || whatsappPage != null || facebookPage != null,
@@ -177,6 +193,8 @@ class ChannelFeedRepository(
       Regex(
         """"(?:articleBody|headline|description|message|caption|body|text)"\s*:\s*(?:\{\s*"text"\s*:\s*)?"((?:\\.|[^"\\]){16,1500})""""
       )
+    private val FB_MOBILE_PARAGRAPH_REGEX =
+      Regex("""<p\b[^>]*>(.*?)</p>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
     private val FOLLOWERS_COUNT_REGEX =
       Regex("""\b([\d.,]+[KkMm]?)\s+followers?\b""", RegexOption.IGNORE_CASE)
     private val BR_TAG_REGEX = Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE)
@@ -352,6 +370,23 @@ class ChannelFeedRepository(
             isLiveChannelCard = true,
           )
         )
+      } else if (og.liveTitle != null || og.subscriberCount != null) {
+        val followerPart =
+          og.subscriberCount?.let { "$it followers" } ?: "Official Broadcasts"
+        posts.add(
+          FeedPost(
+            id = "wa_live_snapshot",
+            platforms = listOf(ChannelPlatform.WHATSAPP),
+            platformUrls = mapOf(ChannelPlatform.WHATSAPP to resolvedUrl),
+            channelTitle = usefulTitle,
+            text =
+              "$usefulTitle • $followerPart\nFollow the Project π WhatsApp Channel for direct announcements and updates.",
+            timestampLabel = "Live Channel",
+            imageUrl = og.imageUrl,
+            primaryUrl = resolvedUrl,
+            isLiveChannelCard = true,
+          )
+        )
       }
       return ParsedChannelResult(preview = og, posts = posts)
     }
@@ -361,13 +396,13 @@ class ChannelFeedRepository(
       resolvedUrl: String = ProjectPiChannels.FACEBOOK_URL,
     ): ParsedChannelResult {
       val og = parseOpenGraphMetadata("facebook", html, resolvedUrl)
-      val embeddedTexts = extractEmbeddedJsonTexts(html)
+      val embeddedTexts = (extractEmbeddedJsonTexts(html) + extractFacebookMobileHtmlPosts(html)).distinct()
       val usefulDesc = og.liveDescription?.takeUnless(::isGenericBoilerplate)
-      val usefulTitle = og.liveTitle?.takeUnless(::isGenericBoilerplate) ?: "Facebook"
+      val usefulTitle = og.liveTitle?.takeUnless(::isGenericBoilerplate) ?: "Project π • Facebook"
 
       val posts = mutableListOf<FeedPost>()
       if (embeddedTexts.isNotEmpty()) {
-        embeddedTexts.take(10).forEachIndexed { idx, body ->
+        embeddedTexts.take(12).forEachIndexed { idx, body ->
           posts.add(
             FeedPost(
               id = "fb_http_$idx",
@@ -396,8 +431,51 @@ class ChannelFeedRepository(
             isLiveChannelCard = true,
           )
         )
+      } else if (og.liveTitle != null || resolvedUrl.contains("facebook.com", ignoreCase = true)) {
+        posts.add(
+          FeedPost(
+            id = "fb_live_snapshot",
+            platforms = listOf(ChannelPlatform.FACEBOOK),
+            platformUrls = mapOf(ChannelPlatform.FACEBOOK to resolvedUrl),
+            channelTitle = usefulTitle,
+            text =
+              "Official Project π Facebook page connected. Open the Facebook tab once to sync full wall posts automatically.",
+            timestampLabel = "Live Channel",
+            imageUrl = null,
+            primaryUrl = resolvedUrl,
+            isLiveChannelCard = true,
+          )
+        )
       }
       return ParsedChannelResult(preview = og, posts = posts)
+    }
+
+    private fun buildFacebookMobileUrls(resolvedUrl: String): List<String> {
+      if (!resolvedUrl.contains("facebook.com", ignoreCase = true)) return emptyList()
+      val cleaned =
+        resolvedUrl
+          .replace("://www.facebook.com", "://m.facebook.com", ignoreCase = true)
+          .replace("://web.facebook.com", "://m.facebook.com", ignoreCase = true)
+      val mbasic = cleaned.replace("://m.facebook.com", "://mbasic.facebook.com", ignoreCase = true)
+      return listOf(cleaned, mbasic).distinct().filter { it != resolvedUrl }
+    }
+
+    private fun extractFacebookMobileHtmlPosts(html: String): List<String> {
+      if (!html.contains("facebook", ignoreCase = true) && !html.contains("story_body_container")) {
+        return emptyList()
+      }
+      return FB_MOBILE_PARAGRAPH_REGEX.findAll(html)
+        .map { cleanHtmlText(it.groupValues[1]) }
+        .filter { text ->
+          text.length in 24..1800 &&
+            text.count { it == ' ' } >= 3 &&
+            !isGenericBoilerplate(text) &&
+            !text.contains("javascript", ignoreCase = true) &&
+            !text.contains("browser", ignoreCase = true)
+        }
+        .distinct()
+        .take(12)
+        .toList()
     }
 
     fun parseOpenGraphMetadata(

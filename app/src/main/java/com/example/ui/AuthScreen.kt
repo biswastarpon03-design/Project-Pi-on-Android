@@ -2,6 +2,7 @@ package com.example.ui
 
 import android.app.Activity
 import android.content.Context
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
@@ -19,12 +20,21 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AccountCircle
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -33,9 +43,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,7 +67,15 @@ import androidx.credentials.exceptions.GetCredentialCancellationException
 import com.example.R
 import com.example.data.AuthFlowStage
 import com.example.data.FirebaseAuthErrorHandler
+import com.example.data.OtpAuthRepository
+import com.example.data.OtpAuthValidator
+import com.example.data.OtpPurpose
+import com.example.data.OtpServerException
 import com.example.model.ChannelPlatform
+import com.example.ui.components.AuthFormMode
+import com.example.ui.components.CreateAccountForm
+import com.example.ui.components.ForgotPasswordForm
+import com.example.ui.components.LogInForm
 import com.example.ui.components.PlatformGlyphIcon
 import com.example.ui.components.platformAccentFor
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
@@ -67,6 +87,7 @@ import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.auth
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
@@ -76,24 +97,246 @@ fun AuthScreen(
   onAuthSuccess: () -> Unit,
   modifier: Modifier = Modifier,
   errorHandler: FirebaseAuthErrorHandler = FirebaseAuthErrorHandler.default,
+  otpAuthRepository: OtpAuthRepository = OtpAuthRepository.default,
+  enableAutoSignIn: Boolean = true,
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
   val credentialManager = remember(context) { CredentialManager.create(context) }
   val snackbarHostState = remember { SnackbarHostState() }
 
-  var isLoading by remember { mutableStateOf(false) }
-  var errorMessage by remember { mutableStateOf<String?>(null) }
+  var formMode by rememberSaveable { mutableStateOf(AuthFormMode.LOGIN) }
+  var email by rememberSaveable { mutableStateOf("") }
+  var username by rememberSaveable { mutableStateOf("") }
+  var password by rememberSaveable { mutableStateOf("") }
+  var otp by rememberSaveable { mutableStateOf("") }
+  var otpSentToEmail by rememberSaveable { mutableStateOf<String?>(null) }
+  var otpCooldownSeconds by rememberSaveable { mutableIntStateOf(0) }
 
-  LaunchedEffect(Unit) {
-    attemptAutoSignIn(
-      context = context,
-      credentialManager = credentialManager,
-      onAuthSuccess = onAuthSuccess,
-      onUnauthenticated = {},
-      scope = scope,
-      errorHandler = errorHandler,
-    )
+  var isEmailRequestInFlight by remember { mutableStateOf(false) }
+  var isSendingOtp by remember { mutableStateOf(false) }
+  var isGoogleLoading by remember { mutableStateOf(false) }
+  var showSlowServerHint by remember { mutableStateOf(false) }
+  var errorMessage by remember { mutableStateOf<String?>(null) }
+  var statusMessage by remember { mutableStateOf<String?>(null) }
+
+  val isBusy = isEmailRequestInFlight || isGoogleLoading
+
+  LaunchedEffect(enableAutoSignIn) {
+    if (enableAutoSignIn) {
+      attemptAutoSignIn(
+        context = context,
+        credentialManager = credentialManager,
+        onAuthSuccess = onAuthSuccess,
+        onUnauthenticated = {},
+        scope = scope,
+        errorHandler = errorHandler,
+      )
+    }
+  }
+
+  LaunchedEffect(otpAuthRepository) {
+    otpAuthRepository.warmUpServer()
+  }
+
+  LaunchedEffect(otpCooldownSeconds) {
+    if (otpCooldownSeconds > 0) {
+      delay(1_000L)
+      otpCooldownSeconds -= 1
+    }
+  }
+
+  LaunchedEffect(isEmailRequestInFlight) {
+    if (isEmailRequestInFlight) {
+      showSlowServerHint = false
+      delay(3_500L)
+      if (isEmailRequestInFlight) {
+        showSlowServerHint = true
+      }
+    } else {
+      showSlowServerHint = false
+    }
+  }
+
+  fun switchMode(target: AuthFormMode) {
+    formMode = target
+    errorMessage = null
+    statusMessage = null
+    if (target != AuthFormMode.LOGIN) {
+      otp = ""
+      otpSentToEmail = null
+    }
+  }
+
+  fun requestEmailOtp(purpose: OtpPurpose) {
+    val normalizedEmail = OtpAuthValidator.normalizeEmail(email)
+    if (!OtpAuthValidator.isValidEmail(normalizedEmail)) {
+      errorMessage = context.getString(R.string.auth_validation_invalid_email)
+      statusMessage = null
+      return
+    }
+    errorMessage = null
+    statusMessage = null
+    isEmailRequestInFlight = true
+    isSendingOtp = true
+
+    scope.launch {
+      val result = otpAuthRepository.sendEmailOtp(email = normalizedEmail, purpose = purpose)
+      isEmailRequestInFlight = false
+      isSendingOtp = false
+
+      result.onSuccess { response ->
+        otpSentToEmail = normalizedEmail
+        otpCooldownSeconds = response.retryAfterSeconds ?: 45
+        statusMessage = context.getString(R.string.auth_otp_sent_banner, normalizedEmail)
+      }.onFailure { err ->
+        val serverErr = err as? OtpServerException
+        if (serverErr?.retryAfterSeconds != null && serverErr.retryAfterSeconds > 0) {
+          otpCooldownSeconds = serverErr.retryAfterSeconds
+        }
+        errorMessage = err.message ?: context.getString(R.string.auth_error_network)
+      }
+    }
+  }
+
+  fun submitLogin() {
+    val normalizedEmail = OtpAuthValidator.normalizeEmail(email)
+    if (!OtpAuthValidator.isValidEmail(normalizedEmail)) {
+      errorMessage = context.getString(R.string.auth_validation_invalid_email)
+      return
+    }
+    if (password.isEmpty()) {
+      errorMessage = context.getString(R.string.auth_validation_enter_password)
+      return
+    }
+    errorMessage = null
+    statusMessage = null
+    isEmailRequestInFlight = true
+
+    scope.launch {
+      val result =
+        otpAuthRepository.loginWithEmailPassword(email = normalizedEmail, password = password)
+      isEmailRequestInFlight = false
+
+      result.onSuccess {
+        onAuthSuccess()
+      }.onFailure { err ->
+        errorMessage =
+          if (err is OtpServerException) {
+            err.message
+          } else {
+            errorHandler.handleAuthError(
+              context = context,
+              exception = err,
+              stage = AuthFlowStage.FIREBASE_CREDENTIAL_EXCHANGE,
+            ).userMessage
+          }
+      }
+    }
+  }
+
+  fun submitCreateAccount() {
+    val normalizedUsername = OtpAuthValidator.normalizeUsername(username)
+    val normalizedEmail = OtpAuthValidator.normalizeEmail(email)
+    val normalizedOtp = otp.trim()
+
+    when {
+      !OtpAuthValidator.isValidUsername(normalizedUsername) -> {
+        errorMessage = context.getString(R.string.auth_validation_invalid_username)
+        return
+      }
+      !OtpAuthValidator.isValidEmail(normalizedEmail) -> {
+        errorMessage = context.getString(R.string.auth_validation_invalid_email)
+        return
+      }
+      !OtpAuthValidator.isValidPassword(password) -> {
+        errorMessage = context.getString(R.string.auth_validation_invalid_password)
+        return
+      }
+      !OtpAuthValidator.isValidOtp(normalizedOtp) -> {
+        errorMessage = context.getString(R.string.auth_validation_invalid_otp)
+        return
+      }
+    }
+
+    errorMessage = null
+    statusMessage = null
+    isEmailRequestInFlight = true
+
+    scope.launch {
+      val result =
+        otpAuthRepository.registerWithEmailOtp(
+          email = normalizedEmail,
+          username = normalizedUsername,
+          password = password,
+          otp = normalizedOtp,
+        )
+      isEmailRequestInFlight = false
+
+      result.onSuccess {
+        onAuthSuccess()
+      }.onFailure { err ->
+        errorMessage =
+          if (err is OtpServerException) {
+            err.message
+          } else {
+            errorHandler.handleAuthError(
+              context = context,
+              exception = err,
+              stage = AuthFlowStage.FIREBASE_CREDENTIAL_EXCHANGE,
+            ).userMessage
+          }
+      }
+    }
+  }
+
+  fun submitResetPassword() {
+    val normalizedEmail = OtpAuthValidator.normalizeEmail(email)
+    val normalizedOtp = otp.trim()
+
+    when {
+      !OtpAuthValidator.isValidEmail(normalizedEmail) -> {
+        errorMessage = context.getString(R.string.auth_validation_invalid_email)
+        return
+      }
+      !OtpAuthValidator.isValidOtp(normalizedOtp) -> {
+        errorMessage = context.getString(R.string.auth_validation_invalid_otp)
+        return
+      }
+      !OtpAuthValidator.isValidPassword(password) -> {
+        errorMessage = context.getString(R.string.auth_validation_invalid_password)
+        return
+      }
+    }
+
+    errorMessage = null
+    statusMessage = null
+    isEmailRequestInFlight = true
+
+    scope.launch {
+      val result =
+        otpAuthRepository.resetPasswordWithOtp(
+          email = normalizedEmail,
+          otp = normalizedOtp,
+          newPassword = password,
+        )
+      isEmailRequestInFlight = false
+
+      result.onSuccess {
+        onAuthSuccess()
+      }.onFailure { err ->
+        errorMessage =
+          if (err is OtpServerException) {
+            err.message
+          } else {
+            errorHandler.handleAuthError(
+              context = context,
+              exception = err,
+              stage = AuthFlowStage.FIREBASE_CREDENTIAL_EXCHANGE,
+            ).userMessage
+          }
+      }
+    }
   }
 
   Scaffold(
@@ -108,7 +351,11 @@ fun AuthScreen(
     },
   ) { innerPadding ->
     Box(
-      modifier = Modifier.fillMaxSize().padding(innerPadding).padding(24.dp),
+      modifier =
+        Modifier.fillMaxSize()
+          .padding(innerPadding)
+          .verticalScroll(rememberScrollState())
+          .padding(horizontal = 20.dp, vertical = 24.dp),
       contentAlignment = Alignment.Center,
     ) {
       Surface(
@@ -119,16 +366,16 @@ fun AuthScreen(
         tonalElevation = 1.dp,
       ) {
         Column(
-          modifier = Modifier.fillMaxWidth().padding(28.dp),
+          modifier = Modifier.fillMaxWidth().padding(24.dp),
           horizontalAlignment = Alignment.CenterHorizontally,
-          verticalArrangement = Arrangement.spacedBy(16.dp),
+          verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
           Image(
             painter = painterResource(id = R.drawable.project_pi_logo),
             contentDescription = stringResource(R.string.cd_project_pi_logo),
             contentScale = ContentScale.Crop,
             modifier =
-              Modifier.size(84.dp)
+              Modifier.size(72.dp)
                 .clip(CircleShape)
                 .border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape),
           )
@@ -142,7 +389,7 @@ fun AuthScreen(
 
           Text(
             text = stringResource(R.string.auth_subtitle),
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
           )
@@ -177,6 +424,61 @@ fun AuthScreen(
             }
           }
 
+          if (formMode != AuthFormMode.FORGOT_PASSWORD) {
+            SingleChoiceSegmentedButtonRow(
+              modifier = Modifier.fillMaxWidth(),
+            ) {
+              SegmentedButton(
+                selected = formMode == AuthFormMode.LOGIN,
+                onClick = { switchMode(AuthFormMode.LOGIN) },
+                enabled = !isBusy,
+                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                modifier = Modifier.heightIn(min = 48.dp).testTag("auth_mode_login"),
+              ) {
+                Text(stringResource(R.string.auth_mode_login))
+              }
+              SegmentedButton(
+                selected = formMode == AuthFormMode.SIGN_UP,
+                onClick = { switchMode(AuthFormMode.SIGN_UP) },
+                enabled = !isBusy,
+                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                modifier = Modifier.heightIn(min = 48.dp).testTag("auth_mode_signup"),
+              ) {
+                Text(stringResource(R.string.auth_mode_signup))
+              }
+            }
+          }
+
+          if (!statusMessage.isNullOrBlank()) {
+            Surface(
+              shape = MaterialTheme.shapes.small,
+              color = MaterialTheme.colorScheme.tertiaryContainer,
+              modifier = Modifier.fillMaxWidth().testTag("auth_status_banner"),
+            ) {
+              Text(
+                text = statusMessage.orEmpty(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                modifier = Modifier.padding(12.dp),
+              )
+            }
+          }
+
+          if (showSlowServerHint) {
+            Surface(
+              shape = MaterialTheme.shapes.small,
+              color = MaterialTheme.colorScheme.surfaceVariant,
+              modifier = Modifier.fillMaxWidth().testTag("auth_waking_banner"),
+            ) {
+              Text(
+                text = stringResource(R.string.auth_server_waking_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(12.dp),
+              )
+            }
+          }
+
           if (!errorMessage.isNullOrBlank()) {
             Surface(
               shape = MaterialTheme.shapes.small,
@@ -192,40 +494,121 @@ fun AuthScreen(
             }
           }
 
-          Button(
+          AnimatedContent(
+            targetState = formMode,
+            label = "auth_form_mode",
+          ) { mode ->
+            when (mode) {
+              AuthFormMode.LOGIN ->
+                LogInForm(
+                  email = email,
+                  onEmailChange = { email = it },
+                  password = password,
+                  onPasswordChange = { password = it },
+                  isBusy = isBusy,
+                  onSubmitLogIn = ::submitLogin,
+                  onForgotPasswordClick = { switchMode(AuthFormMode.FORGOT_PASSWORD) },
+                )
+
+              AuthFormMode.SIGN_UP ->
+                CreateAccountForm(
+                  username = username,
+                  onUsernameChange = { username = it },
+                  email = email,
+                  onEmailChange = { email = it },
+                  password = password,
+                  onPasswordChange = { password = it },
+                  otp = otp,
+                  onOtpChange = { otp = it },
+                  otpSentToEmail = otpSentToEmail,
+                  otpCooldownSeconds = otpCooldownSeconds,
+                  isBusy = isBusy,
+                  isSendingOtp = isSendingOtp,
+                  onSendOtp = { requestEmailOtp(OtpPurpose.SIGNUP) },
+                  onSubmitCreateAccount = ::submitCreateAccount,
+                )
+
+              AuthFormMode.FORGOT_PASSWORD ->
+                ForgotPasswordForm(
+                  email = email,
+                  onEmailChange = { email = it },
+                  otp = otp,
+                  onOtpChange = { otp = it },
+                  newPassword = password,
+                  onNewPasswordChange = { password = it },
+                  otpSentToEmail = otpSentToEmail,
+                  otpCooldownSeconds = otpCooldownSeconds,
+                  isBusy = isBusy,
+                  isSendingOtp = isSendingOtp,
+                  onSendResetOtp = { requestEmailOtp(OtpPurpose.RESET) },
+                  onSubmitResetPassword = ::submitResetPassword,
+                  onBackToLogin = { switchMode(AuthFormMode.LOGIN) },
+                )
+            }
+          }
+
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+          ) {
+            HorizontalDivider(
+              modifier = Modifier.weight(1f),
+              color = MaterialTheme.colorScheme.outlineVariant,
+            )
+            Text(
+              text = stringResource(R.string.auth_divider_or),
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            HorizontalDivider(
+              modifier = Modifier.weight(1f),
+              color = MaterialTheme.colorScheme.outlineVariant,
+            )
+          }
+
+          OutlinedButton(
             onClick = {
               errorMessage = null
-              isLoading = true
+              statusMessage = null
+              isGoogleLoading = true
               onGoogleSignInClicked(
                 context = context,
                 credentialManager = credentialManager,
                 onAuthSuccess = {
-                  isLoading = false
+                  isGoogleLoading = false
                   onAuthSuccess()
                 },
                 onAuthError = { msg ->
-                  isLoading = false
+                  isGoogleLoading = false
                   errorMessage = msg
                 },
                 scope = scope,
                 onAuthCancelled = { msg ->
-                  isLoading = false
+                  isGoogleLoading = false
                   errorMessage = msg
                 },
                 snackbarHostState = snackbarHostState,
                 errorHandler = errorHandler,
               )
             },
-            enabled = !isLoading,
+            enabled = !isBusy,
             shape = MaterialTheme.shapes.small,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             modifier =
               Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("google_sign_in_button"),
           ) {
-            if (isLoading) {
+            if (isGoogleLoading) {
               CircularProgressIndicator(
-                modifier = Modifier.size(20.dp),
-                color = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.size(18.dp),
                 strokeWidth = 2.dp,
+              )
+              Spacer(Modifier.width(10.dp))
+            } else {
+              Icon(
+                imageVector = Icons.Rounded.AccountCircle,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
               )
               Spacer(Modifier.width(10.dp))
             }

@@ -1,6 +1,7 @@
 package com.example
 
 import com.example.data.ChannelFeedRepository
+import com.example.data.OtpAuthValidator
 import com.example.data.PostDeduplicator
 import com.example.model.ChannelPlatform
 import com.example.model.FeedPost
@@ -89,7 +90,7 @@ class ExampleUnitTest {
   }
 
   @Test
-  fun telegramParser_extractsPollsAndVideoThumbs_andWhatsAppParserFiltersSeoBio() {
+  fun telegramParser_extractsPollsAndVideoThumbs_andWhatsAppParserBuildsLiveCard() {
     val tgHtml =
       """
       <div class="tgme_widget_message_wrap js-widget_message_wrap">
@@ -117,7 +118,73 @@ class ExampleUnitTest {
       """.trimIndent()
     val parsedWa = ChannelFeedRepository.parseWhatsAppChannelHtml(waSeoHtml)
     assertEquals("33", parsedWa.preview.subscriberCount)
-    assertEquals(0, parsedWa.posts.size)
+    assertEquals(1, parsedWa.posts.size)
+    assertTrue(parsedWa.posts.first().isLiveChannelCard)
+    assertTrue(parsedWa.posts.first().text.contains("33 followers"))
+  }
+
+  @Test
+  fun unifiedFeed_pausesCrossPlatformDeduplicationByDefault_andKeepsAll3Platforms() {
+    val sharedText = "Russian math olympiad 2007 problem"
+    val wa =
+      FeedPost(
+        id = "wa_1",
+        platforms = listOf(ChannelPlatform.WHATSAPP),
+        platformUrls = mapOf(ChannelPlatform.WHATSAPP to ProjectPiChannels.WHATSAPP_URL),
+        channelTitle = "WhatsApp Channel",
+        text = sharedText,
+        timestampLabel = "WhatsApp Channel",
+        primaryUrl = ProjectPiChannels.WHATSAPP_URL,
+      )
+    val tg =
+      FeedPost(
+        id = "tg_1",
+        platforms = listOf(ChannelPlatform.TELEGRAM),
+        platformUrls = mapOf(ChannelPlatform.TELEGRAM to ProjectPiChannels.TELEGRAM_URL),
+        channelTitle = "Telegram Channel",
+        text = sharedText,
+        timestampLabel = "2026-11-21 • 12:00",
+        primaryUrl = ProjectPiChannels.TELEGRAM_URL,
+      )
+    val fb =
+      FeedPost(
+        id = "fb_1",
+        platforms = listOf(ChannelPlatform.FACEBOOK),
+        platformUrls = mapOf(ChannelPlatform.FACEBOOK to ProjectPiChannels.FACEBOOK_URL),
+        channelTitle = "Facebook",
+        text = sharedText,
+        timestampLabel = "Facebook",
+        primaryUrl = ProjectPiChannels.FACEBOOK_URL,
+      )
+
+    val computed =
+      com.example.ui.ProjectPiViewModel.computeUnifiedFeed(
+        basePosts = listOf(wa, tg, fb),
+        webExtractedPosts = emptyMap(),
+        selectedFilter = com.example.model.FeedFilter.ALL,
+        searchQuery = "",
+      )
+    assertEquals(3, computed.filteredPosts.size)
+    assertEquals(1, computed.platformCounts[ChannelPlatform.WHATSAPP])
+    assertEquals(1, computed.platformCounts[ChannelPlatform.TELEGRAM])
+    assertEquals(1, computed.platformCounts[ChannelPlatform.FACEBOOK])
+  }
+
+  @Test
+  fun otpAuthValidator_validatesEmailUsernamePasswordAndOtp_withoutPhone() {
+    assertEquals("alice@example.com", OtpAuthValidator.normalizeEmail("  Alice@Example.COM "))
+    assertTrue(OtpAuthValidator.isValidEmail("alice+pi@example.com"))
+    assertFalse(OtpAuthValidator.isValidEmail("not-an-email"))
+
+    assertTrue(OtpAuthValidator.isValidUsername("Project Pi Member"))
+    assertFalse(OtpAuthValidator.isValidUsername("ab"))
+
+    assertTrue(OtpAuthValidator.isValidPassword("StrongPass123"))
+    assertFalse(OtpAuthValidator.isValidPassword("short7"))
+
+    assertEquals("123456", OtpAuthValidator.normalizeOtp("12-34 5678"))
+    assertTrue(OtpAuthValidator.isValidOtp("123456"))
+    assertFalse(OtpAuthValidator.isValidOtp("12345"))
   }
 }
 
